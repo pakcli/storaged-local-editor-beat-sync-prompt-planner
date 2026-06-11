@@ -32,7 +32,7 @@ const els = {
   clipsLayer: document.getElementById('clips-layer'),
   playhead: document.getElementById('playhead-cursor'),
   timelineWrapper: document.getElementById('timeline-wrapper'),
-  
+
   // Editor
   emptyState: document.getElementById('empty-state'),
   editorForm: document.getElementById('editor-form'),
@@ -48,7 +48,7 @@ const els = {
   promptCompiled: document.getElementById('prompt-compiled'),
   copyBtn: document.getElementById('copy-btn'),
   deleteClipBtn: document.getElementById('delete-clip-btn'),
-  
+
   // Actions
   newProjectBtn: document.getElementById('new-project-btn'),
   saveProjectBtn: document.getElementById('save-project-btn'),
@@ -113,7 +113,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   await checkServerConnection();
   await loadAudioList();
   await loadProjectList();
-  
+
   setupEventListeners();
   renderRuler();
   renderTimeline();
@@ -144,20 +144,23 @@ async function checkServerConnection() {
   const statusEl = document.getElementById('local-status-container');
   try {
     const res = await fetch('/api/projects');
-    if (res.ok) {
-      state.isServerMode = true;
-      els.fallbackBanner.style.display = 'none';
-      if (statusEl) {
-        statusEl.innerHTML = `
-          <div class="local-status-badge">
-            <span class="status-dot"></span>
-            <span class="status-text">Local Machine Server Active</span>
-          </div>
-        `;
+    if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        state.isServerMode = true;
+        els.fallbackBanner.style.display = 'none';
+        if (statusEl) {
+          statusEl.innerHTML = `
+            <div class="local-status-badge">
+              <span class="status-dot"></span>
+              <span class="status-text">Local Machine Server Active</span>
+            </div>
+          `;
+        }
+        return;
       }
-    } else {
-      throw new Error();
     }
+    throw new Error();
   } catch (e) {
     state.isServerMode = false;
     els.fallbackBanner.style.display = 'flex';
@@ -187,8 +190,23 @@ async function loadProjectList() {
     state.projects = Object.keys(localStorage)
       .filter(k => k.startsWith('vibesync_proj_'))
       .map(k => k.replace('vibesync_proj_', ''));
+
+    // If no projects exist, initialize a default starter project
+    if (state.projects.length === 0) {
+      const demoProject = {
+        name: "VibeSync Demo",
+        audioUrl: "",
+        clips: [
+          { id: 'clip_demo_1', title: 'Arrival', start: 0, end: 10, theme: 'arrival', preset: 'arrival', ...PRESETS.arrival },
+          { id: 'clip_demo_2', title: 'Red Rush', start: 10, end: 25, theme: 'red-rush', preset: 'red-rush', ...PRESETS['red-rush'] },
+          { id: 'clip_demo_3', title: 'Human Calm', start: 25, end: 40, theme: 'calm', preset: 'calm', ...PRESETS.calm }
+        ]
+      };
+      localStorage.setItem(`vibesync_proj_${demoProject.name}`, JSON.stringify(demoProject));
+      state.projects.push(demoProject.name);
+    }
   }
-  
+
   // Update Dropdown
   els.projectSelect.innerHTML = '<option value="">-- Select Project --</option>';
   state.projects.forEach(proj => {
@@ -201,7 +219,7 @@ async function loadProjectList() {
   if (state.currentProject) {
     els.projectSelect.value = state.currentProject.name;
   } else if (state.projects.length > 0) {
-    const defaultProj = state.projects.includes('ide a') ? 'ide a' : state.projects[0];
+    const defaultProj = state.projects.includes('VibeSync Demo') ? 'VibeSync Demo' : state.projects[0];
     els.projectSelect.value = defaultProj;
     await selectProject(defaultProj);
   }
@@ -210,12 +228,12 @@ async function loadProjectList() {
 // Load List of Audio Files
 async function loadAudioList() {
   els.audioSelect.innerHTML = '<option value="">-- No Audio File --</option>';
-  
+
   if (state.isServerMode) {
     try {
       const res = await fetch('/api/mp3');
       state.audios = await res.json();
-      
+
       state.audios.forEach(audio => {
         const opt = document.createElement('option');
         opt.value = `/mp3/${audio}`;
@@ -234,7 +252,7 @@ async function loadAudioList() {
       opt.innerText = audioName;
       els.audioSelect.appendChild(opt);
     });
-    
+
     // Also check if current project needs a local file that isn't loaded yet
     if (state.currentProject && state.currentProject.audioUrl && state.currentProject.audioUrl.startsWith('local:')) {
       const neededFile = state.currentProject.audioUrl.replace('local:', '');
@@ -284,11 +302,11 @@ async function selectProject(projectName) {
     };
     state.clips = projectData.clips || [];
     state.selectedClipId = null;
-    
+
     // Set audio select
     els.audioSelect.value = projectData.audioUrl || '';
     loadAudioTrack(projectData.audioUrl || '');
-    
+
     renderTimeline();
     updateEditorPanel();
   }
@@ -301,11 +319,11 @@ async function loadAudioTrack(audioUrl) {
   state.isPlaying = false;
   els.playBtn.innerHTML = '▶';
   state.playheadTime = 0;
-  
+
   // Default states
   els.audioTitle.style.display = 'block';
   els.relinkBtn.style.display = 'none';
-  
+
   if (!audioUrl) {
     state.audioBuffer = null;
     state.audioDuration = 60;
@@ -333,7 +351,7 @@ async function loadAudioTrack(audioUrl) {
         els.audioTitle.style.display = 'none';
         els.relinkBtn.innerText = `⚠️ Relink: ${filename}`;
         els.relinkBtn.style.display = 'inline-flex';
-        
+
         state.audioBuffer = null;
         state.audioDuration = 60;
         renderRuler();
@@ -344,7 +362,7 @@ async function loadAudioTrack(audioUrl) {
       state.audioElement.src = audioUrl;
       const fileName = audioUrl.substring(audioUrl.lastIndexOf('/') + 1);
       els.audioTitle.innerText = fileName;
-      
+
       const res = await fetch(audioUrl);
       const arrayBuf = await res.arrayBuffer();
       decodeAudioData(arrayBuf);
@@ -364,7 +382,7 @@ async function decodeAudioData(arrayBuffer) {
   if (!state.audioContext) {
     state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
-  
+
   try {
     state.audioBuffer = await state.audioContext.decodeAudioData(arrayBuffer);
     state.audioDuration = state.audioBuffer.duration;
@@ -380,19 +398,19 @@ async function decodeAudioData(arrayBuffer) {
 // Canvas waveform generator
 function analyzeAndDrawWaveform() {
   if (!state.audioBuffer) return;
-  
+
   const canvas = els.waveformCanvas;
   const ctx = canvas.getContext('2d');
-  
+
   // Resize canvas internally
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * window.devicePixelRatio;
   canvas.height = rect.height * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  
+
   const width = rect.width;
   const height = rect.height;
-  
+
   ctx.clearRect(0, 0, width, height);
 
   const leftChannel = state.audioBuffer.getChannelData(0);
@@ -437,7 +455,7 @@ function renderRuler() {
   els.ruler.innerHTML = '';
   const duration = state.audioDuration;
   const width = els.ruler.getBoundingClientRect().width || 800;
-  
+
   // Determine tick interval based on audio length
   let step = 5;
   if (duration <= 10) step = 1;
@@ -453,7 +471,7 @@ function renderRuler() {
     tick.innerText = `${t}s`;
     els.ruler.appendChild(tick);
   }
-  
+
   updatePlayheadPosition();
 }
 
@@ -461,7 +479,7 @@ function renderRuler() {
 function setupEventListeners() {
   // Play / Pause
   els.playBtn.addEventListener('click', togglePlayback);
-  
+
   // Spacebar to play/pause
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
@@ -490,7 +508,7 @@ function setupEventListeners() {
   document.getElementById('upload-zone').addEventListener('click', () => {
     els.uploadInput.click();
   });
-  
+
   els.uploadInput.addEventListener('change', handleAudioUpload);
 
   // New Project
@@ -589,7 +607,7 @@ function setupEventListeners() {
       // Toggle active classes for mobile drawer view
       sidebar.classList.toggle('active');
       sidebarOverlay.classList.toggle('active');
-      
+
       // Toggle sidebar-collapsed for desktop collapsible grid view
       if (workspace) {
         workspace.classList.toggle('sidebar-collapsed');
@@ -615,7 +633,7 @@ function setupEventListeners() {
 // Play Pause logic
 function togglePlayback() {
   if (!state.currentAudio) return;
-  
+
   if (state.isPlaying) {
     state.audioElement.pause();
     state.isPlaying = false;
@@ -638,7 +656,7 @@ function handleTimelineSeek(e) {
   const clickX = e.clientX - rect.left;
   const pct = clickX / rect.width;
   const targetTime = Math.max(0, Math.min(state.audioDuration, pct * state.audioDuration));
-  
+
   state.playheadTime = targetTime;
   state.audioElement.currentTime = targetTime;
   updatePlayheadPosition();
@@ -684,7 +702,7 @@ async function handleAudioUpload(e) {
         await loadAudioList();
         els.audioSelect.value = `/mp3/${data.filename}`;
         loadAudioTrack(`/mp3/${data.filename}`);
-        
+
         if (state.currentProject) {
           state.currentProject.audioUrl = `/mp3/${data.filename}`;
         }
@@ -697,7 +715,7 @@ async function handleAudioUpload(e) {
     // Local Mode: Create a temporary object URL to read local file
     const objectUrl = URL.createObjectURL(file);
     state.localAudios[file.name] = objectUrl;
-    
+
     // Add to selector if not present
     let optExists = Array.from(els.audioSelect.options).some(opt => opt.value === `local:${file.name}`);
     if (!optExists) {
@@ -706,10 +724,10 @@ async function handleAudioUpload(e) {
       opt.innerText = file.name;
       els.audioSelect.appendChild(opt);
     }
-    
+
     els.audioSelect.value = `local:${file.name}`;
     loadAudioTrack(`local:${file.name}`);
-    
+
     if (state.currentProject) {
       state.currentProject.audioUrl = `local:${file.name}`;
     }
@@ -721,7 +739,7 @@ async function handleAudioUpload(e) {
 function createNewProject() {
   const name = prompt('Enter project name:');
   if (!name) return;
-  
+
   const cleanName = name.replace(/[^a-zA-Z0-9_\- ]/g, '').trim();
   if (!cleanName) return;
 
@@ -729,13 +747,13 @@ function createNewProject() {
     name: cleanName,
     audioUrl: els.audioSelect.value || ''
   };
-  
+
   state.clips = [
     { id: 'clip_' + Date.now() + '_1', title: 'Arrival', start: 0, end: 10, theme: 'arrival', preset: 'arrival', ...PRESETS.arrival },
     { id: 'clip_' + Date.now() + '_2', title: 'Red Rush', start: 10, end: 25, theme: 'red-rush', preset: 'red-rush', ...PRESETS['red-rush'] }
   ];
   state.selectedClipId = state.clips[0].id;
-  
+
   renderTimeline();
   updateEditorPanel();
   saveCurrentProject();
@@ -802,7 +820,7 @@ function handleProjectImport(e) {
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = async function(evt) {
+  reader.onload = async function (evt) {
     try {
       const projectData = JSON.parse(evt.target.result);
       if (!projectData.name || !Array.isArray(projectData.clips)) {
@@ -819,14 +837,14 @@ function handleProjectImport(e) {
 
       // Auto-save the imported project (either to server or local storage)
       await saveCurrentProject();
-      
+
       // Load audio if defined
       els.audioSelect.value = projectData.audioUrl || '';
       loadAudioTrack(projectData.audioUrl || '');
-      
+
       renderTimeline();
       updateEditorPanel();
-      
+
       showNotification('Project imported successfully!');
     } catch (err) {
       console.error('Failed to parse project JSON:', err);
@@ -860,10 +878,10 @@ function createClipAtPlayhead() {
     alert('Please load or create a project first.');
     return;
   }
-  
+
   const start = Math.floor(state.playheadTime);
   const end = Math.min(state.audioDuration, start + 5);
-  
+
   const newClip = {
     id: 'clip_' + Date.now(),
     title: 'New Clip',
@@ -910,7 +928,7 @@ function applyPreset(key) {
 // Render Clips overlay inside timeline
 function renderTimeline() {
   els.clipsLayer.innerHTML = '';
-  
+
   if (state.clips.length === 0) return;
 
   const duration = state.audioDuration;
@@ -997,7 +1015,7 @@ function handlePointerMove(e) {
   if (drag.action === 'move') {
     let newStart = drag.startLeft + dt;
     let newEnd = newStart + drag.clipDuration;
-    
+
     // Bounds check
     if (newStart < 0) {
       newStart = 0;
@@ -1010,14 +1028,14 @@ function handlePointerMove(e) {
 
     clip.start = parseFloat(newStart.toFixed(2));
     clip.end = parseFloat(newEnd.toFixed(2));
-  } 
+  }
   else if (drag.action === 'resize-left') {
     let newStart = drag.startLeft + dt;
     if (newStart < 0) newStart = 0;
     if (newStart > drag.startRight - 0.5) newStart = drag.startRight - 0.5; // min 0.5s width
 
     clip.start = parseFloat(newStart.toFixed(2));
-  } 
+  }
   else if (drag.action === 'resize-right') {
     let newEnd = drag.startRight + dt;
     if (newEnd > state.audioDuration) newEnd = state.audioDuration;
@@ -1028,7 +1046,7 @@ function handlePointerMove(e) {
 
   // Update visual timeline
   renderTimeline();
-  
+
   // Update editor inputs if selected
   if (state.selectedClipId === clip.id) {
     els.clipStart.value = clip.start;
@@ -1039,10 +1057,10 @@ function handlePointerMove(e) {
 
 function handlePointerUp(e) {
   if (!state.dragState) return;
-  
+
   try {
     els.timelineWrapper.releasePointerCapture(e.pointerId);
-  } catch(err) {}
+  } catch (err) { }
 
   state.dragState = null;
   // Sort clips by start time to maintain clean index order
@@ -1075,7 +1093,7 @@ function updateEditorPanel() {
   els.clipEnd.value = clip.end || 0;
   els.clipTheme.value = clip.theme || 'arrival';
   els.presetSelect.value = clip.preset || '';
-  
+
   els.fieldSubject.value = clip.subject || '';
   els.fieldAction.value = clip.action || '';
   els.fieldCamera.value = clip.camera || '';
@@ -1107,7 +1125,7 @@ function syncFormToClip() {
   clip.end = Math.min(state.audioDuration, parseFloat(els.clipEnd.value) || 0);
   clip.theme = els.clipTheme.value;
   clip.preset = els.presetSelect.value;
-  
+
   clip.subject = els.fieldSubject.value;
   clip.action = els.fieldAction.value;
   clip.camera = els.fieldCamera.value;
