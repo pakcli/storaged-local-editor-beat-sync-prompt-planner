@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeSync // Veo 3.1 Beat-Sync Prompt Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Header Controls (Row 1) -->
+    <header class="header-row">
+      <!-- Left: Toggle Sidebar & Add Clip -->
+      <div class="header-left" style="gap: 0.75rem;">
+        <button id="sidebar-toggle-btn" class="sidebar-toggle-btn" title="Toggle Sidebar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </button>
+        <button id="add-clip-btn" class="btn btn-primary btn-sm" title="Add Clip at Playhead">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Add Clip
+        </button>
+      </div>
+
+      <!-- Center: Main Playback controls -->
+      <div class="header-center">
+        <button id="skip-back-btn" class="btn btn-icon-only" title="Skip back 1 second" style="font-family: var(--font-mono); font-weight: bold; font-size: 0.85rem;">&lt;-1</button>
+        <button id="play-btn" class="play-btn-large" title="Spacebar: Play/Pause">▶</button>
+        <button id="skip-forward-btn" class="btn btn-icon-only" title="Skip forward 1 second" style="font-family: var(--font-mono); font-weight: bold; font-size: 0.85rem;">+1&gt;</button>
+        <span id="time-display" class="time-display" style="margin-left: 0.75rem;">00:00.00 / 00:00.00</span>
+      </div>
+      
+      <!-- Right: Soundtrack info & Fullscreen toggle -->
+      <div class="header-right">
+        <div id="audio-title" class="current-audio-title-header">No track loaded</div>
+        <button id="relink-btn" class="btn btn-accent btn-sm" style="display: none;"></button>
+        <button id="fullscreen-toggle-btn" class="btn btn-icon-only" title="Toggle Fullscreen" style="font-size: 1.1rem; line-height: 1;">⛶</button>
+      </div>
+    </header>
+
+    <!-- Fallback Offline Mode Warning -->
+    <div id="fallback-banner" class="fallback-banner" style="display: none;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      Running locally without server connection. Changes will save in browser memory. Run the server to save directly to disk.
+    </div>
+
+    <!-- Main Workspace Grid -->
+    <div class="workspace">
+      
+      <!-- Backdrop Overlay for Mobile Drawers -->
+      <div id="sidebar-overlay" class="sidebar-overlay"></div>
+      
+      <!-- Left Sidebar: Project Actions + Soundtrack Upload -->
+      <aside class="sidebar" id="sidebar">
+        <!-- Close button (Mobile Only) -->
+        <button id="sidebar-close-btn" class="sidebar-close-btn">&times;</button>
+
+        <!-- Server Connection Status Badge -->
+        <div id="local-status-container" class="local-status-container" style="margin-bottom: 0.5rem; display: flex; justify-content: center; width: 100%;"></div>
+
+        <!-- Project section -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">Manage Projects</div>
+          <select id="project-select" style="width: 100%; margin-bottom: 0.75rem;">
+            <option value="">-- Loading Projects --</option>
+          </select>
+          <div class="sidebar-btn-group">
+            <button id="new-project-btn" class="btn btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              New
+            </button>
+            <button id="save-project-btn" class="btn btn-primary btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              Save
+            </button>
+          </div>
+          <div class="sidebar-btn-group" style="margin-top: 0.5rem;">
+            <button id="export-json-btn" class="btn btn-accent btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Export
+            </button>
+            <button id="import-json-btn" class="btn btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              Import
+            </button>
+            <input type="file" id="import-json-input" accept=".json" style="display: none;">
+          </div>
+        </div>
+
+        <!-- Soundtrack Section -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">Select Soundtrack</div>
+          <select id="audio-select" style="width: 100%; margin-bottom: 1rem;">
+            <option value="">-- No Audio File --</option>
+          </select>
+        </div>
+        
+        <div class="sidebar-section">
+          <div class="sidebar-title">Upload Audio</div>
+          <div id="upload-zone" class="upload-zone">
+            <div class="icon">⇪</div>
+            <p><strong>Drag & Drop</strong> or Click</p>
+            <p style="font-size: 0.65rem; margin-top: 4px;">Supports MP3 & WAV</p>
+          </div>
+          <input type="file" id="upload-input" accept="audio/mp3, audio/wav" style="display: none;">
+        </div>
+
+        <div class="sidebar-section" style="margin-top: auto;">
+          <div class="sidebar-title" style="margin-bottom: 0.5rem;">Shortcuts</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5;">
+            <p>• <strong>Spacebar</strong>: Play/Pause</p>
+            <p>• <strong>Drag Clips</strong>: Re-position</p>
+            <p>• <strong>Resize Handles</strong>: Change duration</p>
+            <p>• <strong>Ruler Click</strong>: Seek time</p>
+          </div>
+        </div>
+      </aside>
+
+      <!-- unified dashboard workspace (split into row 1: player/timeline, row 2: config/compiled prompts) -->
+      <div class="dashboard-grid">
+        
+        <!-- ROW 2: Timeline panel -->
+        <div class="row-timeline">
+          <div class="timeline-panel">
+            <div id="timeline-wrapper" class="timeline-wrapper">
+              <!-- Ruler for times -->
+              <div id="timeline-ruler" class="timeline-ruler"></div>
+              
+              <!-- Amplitude Waveform canvas background -->
+              <div class="waveform-container">
+                <canvas id="waveform-canvas" class="waveform-canvas"></canvas>
+              </div>
+              
+              <!-- Draggable Clips -->
+              <div id="clips-layer" class="clips-layer"></div>
+
+              <!-- Playhead cursor red line -->
+              <div id="playhead-cursor" class="playhead-cursor">
+                <div class="playhead-handle"></div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ROW 2: Two-column settings & prompt completed output -->
+        <div class="row-details">
+          
+          <!-- Column 2.1: Settings / Clip config inputs -->
+          <div class="col-settings">
+            
+            <!-- Empty state when no clip selected -->
+            <div id="empty-state" class="empty-state">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
+              <div>
+                <h4 style="font-weight:600; color:var(--text-main);">No Clip Selected</h4>
+                <p style="font-size: 0.75rem; color:var(--text-muted); margin-top: 0.25rem;">Select a clip on the timeline above to edit settings.</p>
+              </div>
+            </div>
+
+            <!-- Editor inputs form -->
+            <div id="editor-form" class="editor-form" style="display: none;">
+              <!-- Title -->
+              <div class="form-group">
+                <label for="clip-title">Clip Label</label>
+                <input type="text" id="clip-title" placeholder="e.g. Red Rush Drop">
+              </div>
+
+              <!-- Timings -->
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="clip-start">Start Time (s)</label>
+                  <input type="number" id="clip-start" step="0.1" min="0">
+                </div>
+                <div class="form-group">
+                  <label for="clip-end">End Time (s)</label>
+                  <input type="number" id="clip-end" step="0.1" min="0">
+                </div>
+              </div>
+
+              <!-- Color Theme -->
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="clip-theme">Theme Color</label>
+                  <select id="clip-theme">
+                    <option value="arrival">Neutral Dusk (Gray)</option>
+                    <option value="red-rush">Red Rush (Red)</option>
+                    <option value="calm">Human Calm (Blue)</option>
+                    <option value="rebuild">Klimaks 2 (Purple)</option>
+                    <option value="outro">Fade Out (Black)</option>
+                  </select>
+                </div>
+
+                <!-- Preset templates -->
+                <div class="form-group">
+                  <label for="preset-select">Load Vibe Preset</label>
+                  <select id="preset-select">
+                    <option value="">-- Choose Preset --</option>
+                    <option value="arrival">Arrival (Intro)</option>
+                    <option value="red-rush">Red Rush (Beat Drop)</option>
+                    <option value="calm">Human Calm (Slow)</option>
+                    <option value="rebuild">Red Rush 2 (Klimaks)</option>
+                    <option value="outro">Outro (Fade)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="field-subject">Subject</label>
+                <textarea id="field-subject" rows="2" placeholder="What is in the scene..."></textarea>
+              </div>
+
+              <div class="form-group">
+                <label for="field-action">Action & Framing</label>
+                <textarea id="field-action" rows="2" placeholder="What is happening..."></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="field-camera">Camera Movement</label>
+                  <input type="text" id="field-camera" placeholder="e.g. slow zoom">
+                </div>
+                <div class="form-group">
+                  <label for="field-style">Visual Style</label>
+                  <input type="text" id="field-style" placeholder="e.g. monochrome red">
+                </div>
+              </div>
+
+              <button id="delete-clip-btn" class="btn btn-danger btn-sm" style="width: 100%; justify-content: center; margin-top: 0.5rem;">
+                Delete Clip
+              </button>
+            </div>
+
+          </div>
+
+          <!-- Column 2.2: Prompt completed output -->
+          <div class="col-prompt-output">
+            <div class="prompt-output-header">
+              <div class="prompt-title">Veo 3.1 Compiled Prompt</div>
+              <button id="copy-btn" class="btn btn-primary btn-sm">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy Prompt
+              </button>
+            </div>
+            
+            <div class="prompt-scroll-container">
+              <div id="prompt-compiled" class="prompt-text-display">Select a clip to compile prompt...</div>
+            </div>
+            
+            <div class="prompt-hints">
+              <p>• Copy the compiled prompt output above and paste it directly into your Google Vids scene panel.</p>
+            </div>
+          </div>
+
+        </div>
+
+      </div> <!-- closes dashboard-grid -->
+
+    </div> <!-- closes workspace -->
+  </div> <!-- closes app-container -->
+
+  <script src="app.js"></script>
+</body>
+</html>
