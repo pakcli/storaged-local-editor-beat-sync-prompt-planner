@@ -79,13 +79,17 @@
             </button>
           </div>
           <div class="sidebar-btn-group" style="margin-top: 0.5rem;">
-            <button id="export-json-btn" class="btn btn-accent btn-sm">
+            <button id="export-json-btn" class="btn btn-accent btn-sm" style="flex: 1; justify-content: center;">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
               Export
             </button>
-            <button id="import-json-btn" class="btn btn-sm">
+            <button id="import-json-btn" class="btn btn-sm" style="flex: 1; justify-content: center;">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               Import
+            </button>
+            <button id="export-png-btn" class="btn btn-sm" style="flex: 1; justify-content: center;" title="Export Timeline as PNG Image">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+              PNG
             </button>
             <input type="file" id="import-json-input" accept=".json" style="display: none;">
           </div>
@@ -107,6 +111,36 @@
             <p style="font-size: 0.65rem; margin-top: 4px;">Supports MP3 & WAV</p>
           </div>
           <input type="file" id="upload-input" accept="audio/mp3, audio/wav" style="display: none;">
+        </div>
+
+        <!-- Editor & Toggle Settings -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">Editor Settings</div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <label for="snap-toggle" style="font-size: 0.75rem; color: var(--text-muted); cursor: pointer;">Auto-Snap Clips</label>
+              <input type="checkbox" id="snap-toggle" checked style="cursor: pointer; width: auto; margin: 0;">
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <label for="sync-panel-toggle" style="font-size: 0.75rem; color: var(--text-muted); cursor: pointer;" title="Select and open active clip during playback">Sync Panel Control</label>
+              <input type="checkbox" id="sync-panel-toggle" style="cursor: pointer; width: auto; margin: 0;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Timeline Range Settings (Project Specific) -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">Timeline Range</div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <div class="form-group">
+              <label for="timeline-start-input" style="font-size: 0.65rem; text-transform: uppercase;">Start (e.g. -00:07)</label>
+              <input type="text" id="timeline-start-input" value="00:00" placeholder="-00:07 or 00:00" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; font-family: var(--font-mono); width: 100%;">
+            </div>
+            <div class="form-group">
+              <label for="timeline-end-input" style="font-size: 0.65rem; text-transform: uppercase;">End (e.g. 01:00)</label>
+              <input type="text" id="timeline-end-input" value="01:00" placeholder="01:00" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; font-family: var(--font-mono); width: 100%;">
+            </div>
+          </div>
         </div>
 
         <div class="sidebar-section" style="margin-top: auto;">
@@ -207,6 +241,20 @@
                     <option value="outro">Outro (Fade)</option>
                   </select>
                 </div>
+              </div>
+
+              <!-- Storyboard Sketch -->
+              <div class="form-group">
+                <label>Storyboard Sketch</label>
+                <div id="sketch-container" class="sketch-container" style="border: 2px dashed var(--panel-border); border-radius: 8px; height: 90px; display: flex; align-items: center; justify-content: center; cursor: pointer; overflow: hidden; background: rgba(0,0,0,0.25); position: relative; transition: var(--transition-smooth);">
+                  <div id="sketch-placeholder" style="text-align: center; color: var(--text-muted); font-size: 0.8rem; pointer-events: none;">
+                    <span style="font-size: 1.5rem; display: block; margin-bottom: 2px;">📷</span>
+                    Click to upload reference sketch
+                  </div>
+                  <img id="sketch-preview" style="display: none; width: 100%; height: 100%; object-fit: cover;">
+                  <button id="remove-sketch-btn" class="btn btn-icon-only" style="display: none; position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; font-size: 0.8rem; background: rgba(255, 56, 56, 0.8); border: none; color: white; border-radius: 50%; padding: 0;" title="Remove Sketch">&times;</button>
+                </div>
+                <input type="file" id="sketch-file-input" accept="image/*" style="display: none;">
               </div>
 
               <div class="form-group">

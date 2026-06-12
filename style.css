@@ -1096,3 +1096,8 @@ textarea:focus {
     padding: 0.75rem;
   }
 }
+
+.sketch-container:hover {
+  border-color: var(--accent-blue) !important;
+  background: rgba(0, 229, 255, 0.03) !important;
+}

@@ -16,7 +16,11 @@ let state = {
   clips: [],
   selectedClipId: null,
   dragState: null, // { clipId, action, startX, startLeft, startRight, clipDuration }
-  localAudios: {} // stores mapping of filename to object URL
+  localAudios: {}, // stores mapping of filename to object URL
+  autoSnap: true,
+  syncPanelControl: false,
+  timelineStart: 0,
+  timelineEnd: 60
 };
 
 // DOM Elements
@@ -60,7 +64,17 @@ const els = {
   skipBackBtn: document.getElementById('skip-back-btn'),
   skipForwardBtn: document.getElementById('skip-forward-btn'),
   fullscreenToggleBtn: document.getElementById('fullscreen-toggle-btn'),
-  relinkBtn: document.getElementById('relink-btn')
+  relinkBtn: document.getElementById('relink-btn'),
+  snapToggle: document.getElementById('snap-toggle'),
+  syncPanelToggle: document.getElementById('sync-panel-toggle'),
+  timelineStartInput: document.getElementById('timeline-start-input'),
+  timelineEndInput: document.getElementById('timeline-end-input'),
+  exportPngBtn: document.getElementById('export-png-btn'),
+  sketchContainer: document.getElementById('sketch-container'),
+  sketchPlaceholder: document.getElementById('sketch-placeholder'),
+  sketchPreview: document.getElementById('sketch-preview'),
+  removeSketchBtn: document.getElementById('remove-sketch-btn'),
+  sketchFileInput: document.getElementById('sketch-file-input')
 };
 
 // Preset prompts and details
@@ -107,6 +121,55 @@ const PRESETS = {
   }
 };
 
+// Time parsing and formatting helpers (Blender-style range parsing)
+function parseTimeStr(str) {
+  str = str.trim();
+  let isNegative = false;
+  if (str.startsWith('-')) {
+    isNegative = true;
+    str = str.substring(1);
+  } else if (str.startsWith('+')) {
+    str = str.substring(1);
+  }
+  
+  if (str.includes(':')) {
+    const parts = str.split(':');
+    if (parts.length === 2) {
+      const min = parseInt(parts[0], 10) || 0;
+      const sec = parseFloat(parts[1]) || 0;
+      const val = min * 60 + sec;
+      return isNegative ? -val : val;
+    }
+  }
+  const val = parseFloat(str) || 0;
+  return isNegative ? -val : val;
+}
+
+function formatTimeStr(secs) {
+  const isNegative = secs < 0;
+  const absSecs = Math.abs(secs);
+  const m = Math.floor(absSecs / 60);
+  const s = Math.floor(absSecs % 60);
+  const sign = isNegative ? '-' : '';
+  return `${sign}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// Timeline coordinate mapping helpers
+function timeToPct(t) {
+  const start = state.timelineStart;
+  const end = state.timelineEnd;
+  const total = end - start;
+  if (total <= 0) return 0;
+  return ((t - start) / total) * 100;
+}
+
+function pctToTime(pct) {
+  const start = state.timelineStart;
+  const end = state.timelineEnd;
+  const total = end - start;
+  return start + (pct * total);
+}
+
 // Initialize app
 window.addEventListener('DOMContentLoaded', async () => {
   setupAudioElement();
@@ -123,20 +186,74 @@ window.addEventListener('DOMContentLoaded', async () => {
 function setupAudioElement() {
   state.audioElement = new Audio();
   state.audioElement.addEventListener('timeupdate', () => {
-    state.playheadTime = state.audioElement.currentTime;
-    updatePlayheadPosition();
-    updateTimeDisplay();
+    if (state.playheadTime >= 0 && !state.isPlaying) {
+      state.playheadTime = state.audioElement.currentTime;
+      updatePlayheadPosition();
+      updateTimeDisplay();
+    }
   });
   state.audioElement.addEventListener('ended', () => {
-    state.isPlaying = false;
-    els.playBtn.innerHTML = '▶';
+    stopPlayback();
   });
   state.audioElement.addEventListener('loadedmetadata', () => {
     state.audioDuration = state.audioElement.duration || 60;
+    // Auto-update timelineEnd if it is default
+    if (state.currentProject && (state.timelineEnd === 60 || state.timelineEnd === state.audioDuration)) {
+      state.timelineEnd = state.audioDuration;
+      if (els.timelineEndInput) {
+        els.timelineEndInput.value = formatTimeStr(state.timelineEnd);
+      }
+    }
     renderRuler();
     renderTimeline();
     analyzeAndDrawWaveform();
   });
+}
+
+let lastPlaybackTime = 0;
+
+function playbackLoop() {
+  if (!state.isPlaying) return;
+
+  const now = performance.now();
+  const dt = (now - lastPlaybackTime) / 1000;
+  lastPlaybackTime = now;
+
+  if (state.playheadTime < 0) {
+    state.playheadTime += dt;
+    if (state.playheadTime >= 0) {
+      state.playheadTime = 0;
+      state.audioElement.currentTime = 0;
+      state.audioElement.play().catch(err => console.error(err));
+    }
+    updatePlayheadPosition();
+    updateTimeDisplay();
+  } else {
+    state.playheadTime = state.audioElement.currentTime;
+    updatePlayheadPosition();
+    updateTimeDisplay();
+
+    if (state.playheadTime >= state.timelineEnd || state.playheadTime >= state.audioDuration) {
+      stopPlayback();
+      return;
+    }
+  }
+
+  // Handle Sync Panel Control (auto-select active clip)
+  if (state.syncPanelControl) {
+    const activeClip = state.clips.find(c => state.playheadTime >= c.start && state.playheadTime <= c.end);
+    if (activeClip && activeClip.id !== state.selectedClipId) {
+      selectClip(activeClip.id);
+    }
+  }
+
+  requestAnimationFrame(playbackLoop);
+}
+
+function stopPlayback() {
+  state.audioElement.pause();
+  state.isPlaying = false;
+  els.playBtn.innerHTML = '▶';
 }
 
 // Connection check with server
@@ -196,6 +313,8 @@ async function loadProjectList() {
       const demoProject = {
         name: "VibeSync Demo",
         audioUrl: "",
+        timelineStart: 0,
+        timelineEnd: 60,
         clips: [
           { id: 'clip_demo_1', title: 'Arrival', start: 0, end: 10, theme: 'arrival', preset: 'arrival', ...PRESETS.arrival },
           { id: 'clip_demo_2', title: 'Red Rush', start: 10, end: 25, theme: 'red-rush', preset: 'red-rush', ...PRESETS['red-rush'] },
@@ -272,6 +391,10 @@ async function selectProject(projectName) {
     state.currentProject = null;
     state.clips = [];
     state.selectedClipId = null;
+    state.timelineStart = 0;
+    state.timelineEnd = 60;
+    if (els.timelineStartInput) els.timelineStartInput.value = "00:00";
+    if (els.timelineEndInput) els.timelineEndInput.value = "01:00";
     loadAudioTrack(null);
     renderTimeline();
     updateEditorPanel();
@@ -298,10 +421,18 @@ async function selectProject(projectName) {
   if (projectData) {
     state.currentProject = {
       name: projectName,
-      audioUrl: projectData.audioUrl || ''
+      audioUrl: projectData.audioUrl || '',
+      timelineStart: projectData.timelineStart !== undefined ? projectData.timelineStart : 0,
+      timelineEnd: projectData.timelineEnd !== undefined ? projectData.timelineEnd : 60
     };
     state.clips = projectData.clips || [];
     state.selectedClipId = null;
+    state.timelineStart = state.currentProject.timelineStart;
+    state.timelineEnd = state.currentProject.timelineEnd;
+
+    // Update range input values
+    if (els.timelineStartInput) els.timelineStartInput.value = formatTimeStr(state.timelineStart);
+    if (els.timelineEndInput) els.timelineEndInput.value = formatTimeStr(state.timelineEnd);
 
     // Set audio select
     els.audioSelect.value = projectData.audioUrl || '';
@@ -414,7 +545,7 @@ function analyzeAndDrawWaveform() {
   ctx.clearRect(0, 0, width, height);
 
   const leftChannel = state.audioBuffer.getChannelData(0);
-  const step = Math.ceil(leftChannel.length / width);
+  const totalSamples = leftChannel.length;
   const amp = height / 2.5;
 
   ctx.beginPath();
@@ -430,16 +561,28 @@ function analyzeAndDrawWaveform() {
   ctx.lineWidth = 1.5;
 
   for (let i = 0; i < width; i++) {
-    let min = 1.0;
-    let max = -1.0;
-    for (let j = 0; j < step; j++) {
-      const datum = leftChannel[i * step + j];
-      if (datum < min) min = datum;
-      if (datum > max) max = datum;
+    const tStart = pctToTime(i / width);
+    const tEnd = pctToTime((i + 1) / width);
+
+    if (tStart >= 0 && tStart <= state.audioDuration) {
+      const sampleStart = Math.floor((tStart / state.audioDuration) * totalSamples);
+      let sampleEnd = Math.floor((tEnd / state.audioDuration) * totalSamples);
+      if (sampleEnd <= sampleStart) {
+        sampleEnd = sampleStart + 1;
+      }
+
+      let min = 1.0;
+      let max = -1.0;
+      for (let j = sampleStart; j < sampleEnd && j < totalSamples; j++) {
+        const datum = leftChannel[j];
+        if (datum < min) min = datum;
+        if (datum > max) max = datum;
+      }
+      ctx.lineTo(i, (1 + min) * amp + (height / 2 - amp));
+      ctx.lineTo(i, (1 + max) * amp + (height / 2 - amp));
+    } else {
+      ctx.lineTo(i, height / 2);
     }
-    // Draw vertical bars
-    ctx.lineTo(i, (1 + min) * amp + (height / 2 - amp));
-    ctx.lineTo(i, (1 + max) * amp + (height / 2 - amp));
   }
   ctx.stroke();
 }
@@ -453,18 +596,22 @@ function clearWaveform() {
 // Timeline Ruler Rendering
 function renderRuler() {
   els.ruler.innerHTML = '';
-  const duration = state.audioDuration;
-  const width = els.ruler.getBoundingClientRect().width || 800;
+  const range = state.timelineEnd - state.timelineStart;
+  if (range <= 0) return;
 
-  // Determine tick interval based on audio length
+  // Determine tick interval based on timeline range length
   let step = 5;
-  if (duration <= 10) step = 1;
-  else if (duration <= 30) step = 2;
-  else if (duration <= 90) step = 5;
+  if (range <= 10) step = 1;
+  else if (range <= 30) step = 2;
+  else if (range <= 90) step = 5;
   else step = 10;
 
-  for (let t = 0; t <= duration; t += step) {
-    const leftPct = (t / duration) * 100;
+  const firstTick = Math.ceil(state.timelineStart / step) * step;
+
+  for (let t = firstTick; t <= state.timelineEnd; t += step) {
+    const leftPct = timeToPct(t);
+    if (leftPct < 0 || leftPct > 100) continue;
+
     const tick = document.createElement('div');
     tick.className = 'ruler-tick' + (t % (step * 2) === 0 ? ' major' : '');
     tick.style.left = `${leftPct}%`;
@@ -504,6 +651,54 @@ function setupEventListeners() {
     }
   });
 
+  // Editor Toggles and Project Settings
+  els.snapToggle.addEventListener('change', (e) => {
+    state.autoSnap = e.target.checked;
+  });
+
+  els.syncPanelToggle.addEventListener('change', (e) => {
+    state.syncPanelControl = e.target.checked;
+  });
+
+  els.timelineStartInput.addEventListener('change', (e) => {
+    const val = parseTimeStr(e.target.value);
+    state.timelineStart = val;
+    if (state.currentProject) {
+      state.currentProject.timelineStart = val;
+    }
+    e.target.value = formatTimeStr(val);
+    renderRuler();
+    renderTimeline();
+    analyzeAndDrawWaveform();
+  });
+
+  els.timelineEndInput.addEventListener('change', (e) => {
+    const val = parseTimeStr(e.target.value);
+    state.timelineEnd = val;
+    if (state.currentProject) {
+      state.currentProject.timelineEnd = val;
+    }
+    e.target.value = formatTimeStr(val);
+    renderRuler();
+    renderTimeline();
+    analyzeAndDrawWaveform();
+  });
+
+  els.exportPngBtn.addEventListener('click', exportTimelinePNG);
+
+  // Storyboard Sketch listeners
+  els.sketchContainer.addEventListener('click', (e) => {
+    if (e.target === els.removeSketchBtn) return;
+    els.sketchFileInput.click();
+  });
+
+  els.sketchFileInput.addEventListener('change', handleSketchUpload);
+
+  els.removeSketchBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeSketch();
+  });
+
   // File Upload
   document.getElementById('upload-zone').addEventListener('click', () => {
     els.uploadInput.click();
@@ -528,16 +723,24 @@ function setupEventListeners() {
   // Skip buttons click handlers
   els.skipBackBtn.addEventListener('click', () => {
     if (!state.currentAudio) return;
-    state.playheadTime = Math.max(0, state.playheadTime - 1.0);
-    state.audioElement.currentTime = state.playheadTime;
+    state.playheadTime = Math.max(state.timelineStart, state.playheadTime - 1.0);
+    if (state.playheadTime >= 0) {
+      state.audioElement.currentTime = state.playheadTime;
+    } else {
+      state.audioElement.currentTime = 0;
+    }
     updatePlayheadPosition();
     updateTimeDisplay();
   });
 
   els.skipForwardBtn.addEventListener('click', () => {
     if (!state.currentAudio) return;
-    state.playheadTime = Math.min(state.audioDuration, state.playheadTime + 1.0);
-    state.audioElement.currentTime = state.playheadTime;
+    state.playheadTime = Math.min(state.timelineEnd, state.playheadTime + 1.0);
+    if (state.playheadTime >= 0) {
+      state.audioElement.currentTime = state.playheadTime;
+    } else {
+      state.audioElement.currentTime = 0;
+    }
     updatePlayheadPosition();
     updateTimeDisplay();
   });
@@ -635,38 +838,47 @@ function togglePlayback() {
   if (!state.currentAudio) return;
 
   if (state.isPlaying) {
-    state.audioElement.pause();
-    state.isPlaying = false;
-    els.playBtn.innerHTML = '▶';
+    stopPlayback();
   } else {
     state.audioContext?.resume();
-    state.audioElement.play().then(() => {
-      state.isPlaying = true;
-      els.playBtn.innerHTML = '❚❚';
-    }).catch(err => {
-      console.error('Play failed:', err);
-    });
+    state.isPlaying = true;
+    els.playBtn.innerHTML = '❚❚';
+    lastPlaybackTime = performance.now();
+
+    if (state.playheadTime >= 0) {
+      state.audioElement.currentTime = state.playheadTime;
+      state.audioElement.play().catch(err => {
+        console.error('Play failed:', err);
+      });
+    } else {
+      state.audioElement.pause();
+    }
+
+    requestAnimationFrame(playbackLoop);
   }
 }
 
 // Seek by clicking timeline
 function handleTimelineSeek(e) {
-  if (!state.audioDuration) return;
+  if (state.timelineEnd <= state.timelineStart) return;
   const rect = els.timelineWrapper.getBoundingClientRect();
   const clickX = e.clientX - rect.left;
   const pct = clickX / rect.width;
-  const targetTime = Math.max(0, Math.min(state.audioDuration, pct * state.audioDuration));
+  const targetTime = Math.max(state.timelineStart, Math.min(state.timelineEnd, pctToTime(pct)));
 
   state.playheadTime = targetTime;
-  state.audioElement.currentTime = targetTime;
+  if (state.playheadTime >= 0) {
+    state.audioElement.currentTime = state.playheadTime;
+  } else {
+    state.audioElement.currentTime = 0;
+  }
   updatePlayheadPosition();
   updateTimeDisplay();
 }
 
 // Playhead location updates
 function updatePlayheadPosition() {
-  if (!state.audioDuration) return;
-  const pct = (state.playheadTime / state.audioDuration) * 100;
+  const pct = Math.max(0, Math.min(100, timeToPct(state.playheadTime)));
   els.playhead.style.left = `${pct}%`;
 }
 
@@ -677,10 +889,13 @@ function updateTimeDisplay() {
 }
 
 function formatTime(secs) {
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  const ms = Math.floor((secs % 1) * 100);
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+  const isNegative = secs < 0;
+  const absSecs = Math.abs(secs);
+  const m = Math.floor(absSecs / 60);
+  const s = Math.floor(absSecs % 60);
+  const ms = Math.floor((absSecs % 1) * 100);
+  const sign = isNegative ? '-' : '';
+  return `${sign}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
 }
 
 // Upload Audio File
@@ -743,10 +958,18 @@ function createNewProject() {
   const cleanName = name.replace(/[^a-zA-Z0-9_\- ]/g, '').trim();
   if (!cleanName) return;
 
+  state.timelineStart = 0;
+  state.timelineEnd = state.audioDuration || 60;
+
   state.currentProject = {
     name: cleanName,
-    audioUrl: els.audioSelect.value || ''
+    audioUrl: els.audioSelect.value || '',
+    timelineStart: state.timelineStart,
+    timelineEnd: state.timelineEnd
   };
+
+  if (els.timelineStartInput) els.timelineStartInput.value = formatTimeStr(state.timelineStart);
+  if (els.timelineEndInput) els.timelineEndInput.value = formatTimeStr(state.timelineEnd);
 
   state.clips = [
     { id: 'clip_' + Date.now() + '_1', title: 'Arrival', start: 0, end: 10, theme: 'arrival', preset: 'arrival', ...PRESETS.arrival },
@@ -766,6 +989,8 @@ async function saveCurrentProject() {
   const payload = {
     name: state.currentProject.name,
     audioUrl: state.currentProject.audioUrl,
+    timelineStart: state.timelineStart,
+    timelineEnd: state.timelineEnd,
     clips: state.clips
   };
 
@@ -801,6 +1026,8 @@ function exportProjectJSON() {
   const payload = {
     name: state.currentProject.name,
     audioUrl: state.currentProject.audioUrl,
+    timelineStart: state.timelineStart,
+    timelineEnd: state.timelineEnd,
     clips: state.clips
   };
 
@@ -812,6 +1039,146 @@ function exportProjectJSON() {
   downloadAnchor.click();
   downloadAnchor.remove();
   showNotification('Project JSON downloaded!');
+}
+
+// Export the visual timeline (waveform + ruler ticks + clips) as a PNG image
+function exportTimelinePNG() {
+  if (!state.currentProject) {
+    alert('No project loaded to export.');
+    return;
+  }
+
+  const canvas = els.waveformCanvas;
+  if (!canvas) return;
+
+  // Create an offscreen canvas to combine waveform, ruler, and clips
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = canvas.width;
+  exportCanvas.height = canvas.height + 40; // Extra height for ruler and margin
+  const ctx = exportCanvas.getContext('2d');
+
+  // Fill dark background
+  ctx.fillStyle = '#0d0d13';
+  ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+  // Draw the waveform (centered vertically, shifted down slightly to leave space for ruler)
+  ctx.drawImage(canvas, 0, 30);
+
+  const range = state.timelineEnd - state.timelineStart;
+  const width = exportCanvas.width;
+  const height = canvas.height;
+
+  // Draw ruler line
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 25);
+  ctx.lineTo(width, 25);
+  ctx.stroke();
+
+  // Draw ruler ticks
+  let step = 5;
+  if (range <= 10) step = 1;
+  else if (range <= 30) step = 2;
+  else if (range <= 90) step = 5;
+  else step = 10;
+
+  const firstTick = Math.ceil(state.timelineStart / step) * step;
+
+  ctx.fillStyle = '#8e8e9f';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'left';
+
+  for (let t = firstTick; t <= state.timelineEnd; t += step) {
+    const leftPct = timeToPct(t);
+    if (leftPct < 0 || leftPct > 100) continue;
+    const x = (leftPct / 100) * width;
+    
+    // Draw tick line
+    ctx.strokeStyle = t % (step * 2) === 0 ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, 25);
+    ctx.stroke();
+
+    // Draw tick text
+    ctx.fillText(`${t}s`, x + 4, 20);
+  }
+
+  // Draw clips
+  state.clips.forEach(clip => {
+    const startPct = timeToPct(clip.start);
+    const endPct = timeToPct(clip.end);
+    if (startPct > 100 || endPct < 0) return;
+
+    const x1 = Math.max(0, (startPct / 100) * width);
+    const x2 = Math.min(width, (endPct / 100) * width);
+    const w = x2 - x1;
+    if (w <= 0) return;
+
+    // Determine colors based on clip theme
+    let fill = 'rgba(80, 80, 95, 0.85)';
+    let stroke = 'rgba(120, 120, 140, 0.4)';
+    if (clip.theme === 'red-rush') {
+      fill = 'rgba(255, 56, 56, 0.8)';
+      stroke = 'rgba(255, 100, 100, 0.4)';
+    } else if (clip.theme === 'calm') {
+      fill = 'rgba(0, 160, 220, 0.75)';
+      stroke = 'rgba(100, 220, 255, 0.4)';
+    } else if (clip.theme === 'rebuild') {
+      fill = 'rgba(189, 0, 255, 0.75)';
+      stroke = 'rgba(220, 100, 255, 0.4)';
+    } else if (clip.theme === 'outro') {
+      fill = 'rgba(30, 30, 40, 0.85)';
+      stroke = 'rgba(80, 80, 95, 0.4)';
+    }
+
+    // Clip box coordinates
+    const clipY = 35 + (height * 0.1);
+    const clipH = height * 0.6;
+
+    // Draw clip box
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(x1, clipY, w, clipH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    // Draw selection border if selected
+    if (clip.id === state.selectedClipId) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.roundRect(x1, clipY, w, clipH, 6);
+      ctx.stroke();
+    }
+
+    // Draw clip text labels (clip labels to box width to avoid bleed)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x1 + 4, clipY, w - 8, clipH);
+    ctx.clip();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(clip.title || 'Untitled', x1 + 8, clipY + 18);
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.font = '9px monospace';
+    ctx.fillText(`${clip.start.toFixed(1)}s - ${clip.end.toFixed(1)}s`, x1 + 8, clipY + clipH - 8);
+
+    ctx.restore();
+  });
+
+  // Download combined image
+  const dataUrl = exportCanvas.toDataURL("image/png");
+  const link = document.createElement('a');
+  link.download = `${state.currentProject ? state.currentProject.name : 'vibesync'}-timeline.png`;
+  link.href = dataUrl;
+  link.click();
+  showNotification('Timeline PNG downloaded!');
 }
 
 // Import Project from a local JSON file
@@ -830,8 +1197,17 @@ function handleProjectImport(e) {
 
       state.currentProject = {
         name: projectData.name,
-        audioUrl: projectData.audioUrl || ''
+        audioUrl: projectData.audioUrl || '',
+        timelineStart: projectData.timelineStart !== undefined ? projectData.timelineStart : 0,
+        timelineEnd: projectData.timelineEnd !== undefined ? projectData.timelineEnd : 60
       };
+      state.timelineStart = state.currentProject.timelineStart;
+      state.timelineEnd = state.currentProject.timelineEnd;
+
+      // Update range input values
+      if (els.timelineStartInput) els.timelineStartInput.value = formatTimeStr(state.timelineStart);
+      if (els.timelineEndInput) els.timelineEndInput.value = formatTimeStr(state.timelineEnd);
+
       state.clips = projectData.clips;
       state.selectedClipId = state.clips.length > 0 ? state.clips[0].id : null;
 
@@ -879,14 +1255,43 @@ function createClipAtPlayhead() {
     return;
   }
 
-  const start = Math.floor(state.playheadTime);
-  const end = Math.min(state.audioDuration, start + 5);
+  // Sort clips by start time first to ensure neighbor detection is accurate
+  state.clips.sort((a, b) => a.start - b.start);
+
+  const playhead = state.playheadTime;
+  let start = playhead;
+  
+  // Find immediate neighbors to check for overlap
+  let minStart = state.timelineStart;
+  let maxEnd = state.timelineEnd;
+  
+  for (let i = 0; i < state.clips.length; i++) {
+    const c = state.clips[i];
+    if (c.end <= playhead) {
+      minStart = Math.max(minStart, c.end);
+    }
+    if (c.start >= playhead) {
+      maxEnd = Math.min(maxEnd, c.start);
+    }
+  }
+  
+  // Clamp start to minStart (starts after previous clip ends)
+  if (start < minStart) {
+    start = minStart;
+  }
+  
+  let end = Math.min(maxEnd, start + 5);
+  
+  if (end - start < 0.5) {
+    alert('Cannot add clip here: Not enough space between existing clips (minimum 0.5s required).');
+    return;
+  }
 
   const newClip = {
     id: 'clip_' + Date.now(),
     title: 'New Clip',
-    start: start,
-    end: end,
+    start: parseFloat(start.toFixed(2)),
+    end: parseFloat(end.toFixed(2)),
     theme: 'arrival',
     preset: 'custom',
     subject: 'a scene',
@@ -896,9 +1301,11 @@ function createClipAtPlayhead() {
   };
 
   state.clips.push(newClip);
+  state.clips.sort((a, b) => a.start - b.start);
   state.selectedClipId = newClip.id;
   renderTimeline();
   updateEditorPanel();
+  saveCurrentProject();
 }
 
 // Delete Clip
@@ -908,6 +1315,7 @@ function deleteSelectedClip() {
   state.selectedClipId = null;
   renderTimeline();
   updateEditorPanel();
+  saveCurrentProject();
 }
 
 // Apply Preset Values
@@ -931,11 +1339,9 @@ function renderTimeline() {
 
   if (state.clips.length === 0) return;
 
-  const duration = state.audioDuration;
-
   state.clips.forEach(clip => {
-    const startPct = (clip.start / duration) * 100;
-    const widthPct = ((clip.end - clip.start) / duration) * 100;
+    const startPct = timeToPct(clip.start);
+    const widthPct = timeToPct(clip.end) - startPct;
 
     const clipNode = document.createElement('div');
     clipNode.className = `timeline-clip theme-${clip.theme}`;
@@ -945,26 +1351,51 @@ function renderTimeline() {
     clipNode.style.left = `${startPct}%`;
     clipNode.style.width = `${widthPct}%`;
 
-    // Inner details
+    // Apply Cover Image if set
+    if (clip.image) {
+      clipNode.style.backgroundImage = `url(${clip.image})`;
+      clipNode.style.backgroundSize = 'cover';
+      clipNode.style.backgroundPosition = 'center';
+
+      const overlay = document.createElement('div');
+      overlay.style.position = 'absolute';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.right = '0';
+      overlay.style.bottom = '0';
+      overlay.style.background = 'rgba(10, 10, 15, 0.65)';
+      overlay.style.borderRadius = '5px';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.zIndex = '1';
+      clipNode.appendChild(overlay);
+    }
+
+    // Inner details (stacked above overlay)
     const label = document.createElement('span');
     label.className = 'clip-label';
     label.innerText = clip.title || 'Untitled';
+    label.style.position = 'relative';
+    label.style.zIndex = '2';
     clipNode.appendChild(label);
 
     const time = document.createElement('span');
     time.className = 'clip-time';
     time.innerText = `${clip.start.toFixed(1)}s - ${clip.end.toFixed(1)}s`;
+    time.style.position = 'relative';
+    time.style.zIndex = '2';
     clipNode.appendChild(time);
 
     // Left Resize Handle
     const leftHandle = document.createElement('div');
     leftHandle.className = 'resize-handle left';
+    leftHandle.style.zIndex = '3';
     leftHandle.addEventListener('pointerdown', (e) => startDrag(e, clip.id, 'resize-left'));
     clipNode.appendChild(leftHandle);
 
     // Right Resize Handle
     const rightHandle = document.createElement('div');
     rightHandle.className = 'resize-handle right';
+    rightHandle.style.zIndex = '3';
     rightHandle.addEventListener('pointerdown', (e) => startDrag(e, clip.id, 'resize-right'));
     clipNode.appendChild(rightHandle);
 
@@ -988,10 +1419,12 @@ function startDrag(e, clipId, action) {
   if (!clip) return;
 
   const rect = els.timelineWrapper.getBoundingClientRect();
+  const clipIndex = state.clips.findIndex(c => c.id === clipId);
 
   state.dragState = {
     clipId,
     action,
+    clipIndex,
     startX: e.clientX,
     startLeft: clip.start,
     startRight: clip.end,
@@ -1010,36 +1443,86 @@ function handlePointerMove(e) {
   if (!clip) return;
 
   const dxPx = e.clientX - drag.startX;
-  const dt = (dxPx / drag.timelineWidthPx) * state.audioDuration;
+  const timelineRange = state.timelineEnd - state.timelineStart;
+  const dt = (dxPx / drag.timelineWidthPx) * timelineRange;
+
+  const idx = drag.clipIndex;
+  const prevClip = (idx > 0) ? state.clips[idx - 1] : null;
+  const nextClip = (idx < state.clips.length - 1) ? state.clips[idx + 1] : null;
+
+  // Snapping threshold (10 pixels translated to timeline seconds)
+  const snapThresholdSecs = (10 / drag.timelineWidthPx) * timelineRange;
 
   if (drag.action === 'move') {
     let newStart = drag.startLeft + dt;
     let newEnd = newStart + drag.clipDuration;
 
-    // Bounds check
-    if (newStart < 0) {
-      newStart = 0;
-      newEnd = drag.clipDuration;
+    const minAllowedStart = prevClip ? prevClip.end : state.timelineStart;
+    const maxAllowedEnd = nextClip ? nextClip.start : state.timelineEnd;
+
+    // Snapping logic
+    if (state.autoSnap) {
+      if (Math.abs(newStart - minAllowedStart) < snapThresholdSecs) {
+        newStart = minAllowedStart;
+        newEnd = newStart + drag.clipDuration;
+      }
+      if (Math.abs(newEnd - maxAllowedEnd) < snapThresholdSecs) {
+        newEnd = maxAllowedEnd;
+        newStart = newEnd - drag.clipDuration;
+      }
     }
-    if (newEnd > state.audioDuration) {
-      newEnd = state.audioDuration;
+
+    // Hard clamps for non-overlapping
+    if (newStart < minAllowedStart) {
+      newStart = minAllowedStart;
+      newEnd = newStart + drag.clipDuration;
+    }
+    if (newEnd > maxAllowedEnd) {
+      newEnd = maxAllowedEnd;
       newStart = newEnd - drag.clipDuration;
     }
+
+    if (newStart < minAllowedStart) newStart = minAllowedStart;
+    if (newEnd > maxAllowedEnd) newEnd = maxAllowedEnd;
 
     clip.start = parseFloat(newStart.toFixed(2));
     clip.end = parseFloat(newEnd.toFixed(2));
   }
   else if (drag.action === 'resize-left') {
     let newStart = drag.startLeft + dt;
-    if (newStart < 0) newStart = 0;
-    if (newStart > drag.startRight - 0.5) newStart = drag.startRight - 0.5; // min 0.5s width
+
+    const minAllowedStart = prevClip ? prevClip.end : state.timelineStart;
+    const maxStart = drag.startRight - 0.5; // minimum width of 0.5s
+
+    // Snapping logic
+    if (state.autoSnap) {
+      if (Math.abs(newStart - minAllowedStart) < snapThresholdSecs) {
+        newStart = minAllowedStart;
+      }
+    }
+
+    // Clamp limits
+    if (newStart < minAllowedStart) newStart = minAllowedStart;
+    if (newStart > maxStart) newStart = maxStart;
 
     clip.start = parseFloat(newStart.toFixed(2));
   }
   else if (drag.action === 'resize-right') {
     let newEnd = drag.startRight + dt;
-    if (newEnd > state.audioDuration) newEnd = state.audioDuration;
-    if (newEnd < drag.startLeft + 0.5) newEnd = drag.startLeft + 0.5; // min 0.5s width
+
+    const minEnd = drag.startLeft + 0.5; // minimum width of 0.5s
+    const maxAllowedEnd = nextClip ? nextClip.start : state.timelineEnd;
+
+    // Snapping logic
+    if (state.autoSnap) {
+      if (Math.abs(newEnd - maxAllowedEnd) < snapThresholdSecs) {
+        newEnd = maxAllowedEnd;
+      }
+    }
+
+    // Clamp limits
+    if (newEnd < minEnd) newEnd = minEnd;
+    if (newEnd > maxAllowedEnd) newEnd = maxAllowedEnd;
 
     clip.end = parseFloat(newEnd.toFixed(2));
   }
@@ -1094,6 +1577,19 @@ function updateEditorPanel() {
   els.clipTheme.value = clip.theme || 'arrival';
   els.presetSelect.value = clip.preset || '';
 
+  // Storyboard Sketch preview update
+  if (clip.image) {
+    els.sketchPreview.src = clip.image;
+    els.sketchPreview.style.display = 'block';
+    els.sketchPlaceholder.style.display = 'none';
+    els.removeSketchBtn.style.display = 'inline-flex';
+  } else {
+    els.sketchPreview.src = '';
+    els.sketchPreview.style.display = 'none';
+    els.sketchPlaceholder.style.display = 'flex';
+    els.removeSketchBtn.style.display = 'none';
+  }
+
   els.fieldSubject.value = clip.subject || '';
   els.fieldAction.value = clip.action || '';
   els.fieldCamera.value = clip.camera || '';
@@ -1120,9 +1616,47 @@ function syncFormToClip() {
   const clip = state.clips.find(c => c.id === state.selectedClipId);
   if (!clip) return;
 
+  const idx = state.clips.findIndex(c => c.id === state.selectedClipId);
+  const prevClip = (idx > 0) ? state.clips[idx - 1] : null;
+  const nextClip = (idx < state.clips.length - 1) ? state.clips[idx + 1] : null;
+
+  const minAllowedStart = prevClip ? prevClip.end : state.timelineStart;
+  const maxAllowedEnd = nextClip ? nextClip.start : state.timelineEnd;
+
+  let startVal = parseFloat(els.clipStart.value);
+  if (isNaN(startVal)) startVal = clip.start;
+  let endVal = parseFloat(els.clipEnd.value);
+  if (isNaN(endVal)) endVal = clip.end;
+
+  // Enforce boundaries
+  if (startVal < minAllowedStart) startVal = minAllowedStart;
+  if (endVal > maxAllowedEnd) endVal = maxAllowedEnd;
+
+  // Enforce minimum length of 0.5s
+  if (endVal < startVal + 0.5) {
+    if (document.activeElement === els.clipStart) {
+      startVal = endVal - 0.5;
+      if (startVal < minAllowedStart) {
+        startVal = minAllowedStart;
+        endVal = startVal + 0.5;
+      }
+    } else {
+      endVal = startVal + 0.5;
+      if (endVal > maxAllowedEnd) {
+        endVal = maxAllowedEnd;
+        startVal = endVal - 0.5;
+      }
+    }
+  }
+
+  clip.start = parseFloat(startVal.toFixed(2));
+  clip.end = parseFloat(endVal.toFixed(2));
+
+  // Sync inputs back to clean clamped values
+  els.clipStart.value = clip.start;
+  els.clipEnd.value = clip.end;
+
   clip.title = els.clipTitle.value;
-  clip.start = Math.max(0, parseFloat(els.clipStart.value) || 0);
-  clip.end = Math.min(state.audioDuration, parseFloat(els.clipEnd.value) || 0);
   clip.theme = els.clipTheme.value;
   clip.preset = els.presetSelect.value;
 
@@ -1146,4 +1680,67 @@ function copyCompiledPrompt() {
   }).catch(err => {
     alert('Failed to copy to clipboard: ' + err);
   });
+}
+
+// Storyboard Sketch Handlers
+function handleSketchUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function (evt) {
+    const rawDataUrl = evt.target.result;
+    // Resize and compress the image before saving
+    resizeImage(rawDataUrl, (resizedDataUrl) => {
+      const clip = state.clips.find(c => c.id === state.selectedClipId);
+      if (clip) {
+        clip.image = resizedDataUrl;
+        updateEditorPanel();
+        renderTimeline();
+        saveCurrentProject();
+      }
+    });
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+
+function resizeImage(dataUrl, callback) {
+  const img = new Image();
+  img.onload = () => {
+    const maxDim = 480; // Target max dimension for layout thumbnail
+    let w = img.width;
+    let h = img.height;
+
+    if (w > maxDim || h > maxDim) {
+      if (w > h) {
+        h = Math.round((h * maxDim) / w);
+        w = maxDim;
+      } else {
+        w = Math.round((w * maxDim) / h);
+        h = maxDim;
+      }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+
+    // Compress to JPEG with 0.7 quality factor
+    const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+    callback(compressedDataUrl);
+  };
+  img.src = dataUrl;
+}
+
+function removeSketch() {
+  const clip = state.clips.find(c => c.id === state.selectedClipId);
+  if (clip) {
+    delete clip.image;
+    updateEditorPanel();
+    renderTimeline();
+    saveCurrentProject();
+  }
 }
