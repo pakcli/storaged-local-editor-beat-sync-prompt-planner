@@ -28,10 +28,15 @@
 
       <!-- Center: Main Playback controls -->
       <div class="header-center">
+        <button id="restart-btn" class="btn btn-icon-only" title="Restart Playback from Beginning" style="font-size: 1rem; line-height: 1;">⏮</button>
         <button id="skip-back-btn" class="btn btn-icon-only" title="Skip back 1 second" style="font-family: var(--font-mono); font-weight: bold; font-size: 0.85rem;">&lt;-1</button>
         <button id="play-btn" class="play-btn-large" title="Spacebar: Play/Pause">▶</button>
         <button id="skip-forward-btn" class="btn btn-icon-only" title="Skip forward 1 second" style="font-family: var(--font-mono); font-weight: bold; font-size: 0.85rem;">+1&gt;</button>
-        <span id="time-display" class="time-display" style="margin-left: 0.75rem;">00:00.00 / 00:00.00</span>
+        <span id="time-display" class="time-display" style="margin-left: 0.5rem; margin-right: 0.5rem;">00:00.00 / 00:00.00</span>
+        <div class="volume-container" style="display: flex; align-items: center; gap: 0.4rem; margin-left: 0.5rem; background: rgba(255,255,255,0.04); padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid var(--panel-border);">
+          <span id="volume-icon" style="font-size: 0.85rem; color: var(--text-muted); user-select: none;">🔊</span>
+          <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8" style="width: 60px; height: 3px; cursor: pointer; margin: 0; padding: 0;">
+        </div>
       </div>
       
       <!-- Right: Soundtrack info & Fullscreen toggle -->
@@ -87,10 +92,6 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               Import
             </button>
-            <button id="export-png-btn" class="btn btn-sm" style="flex: 1; justify-content: center;" title="Export Timeline as PNG Image">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-              PNG
-            </button>
             <input type="file" id="import-json-input" accept=".json" style="display: none;">
           </div>
         </div>
@@ -143,6 +144,40 @@
           </div>
         </div>
 
+        <!-- Viewport Settings (Moved to Sidebar) -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">Viewport Settings</div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <div class="form-group">
+              <label for="preview-ratio">Aspect Ratio</label>
+              <select id="preview-ratio" style="width: 100%;">
+                <option value="9:16">9:16 (Default)</option>
+                <option value="16:9">16:9</option>
+                <option value="1:1">1:1</option>
+                <option value="3:4">3:4</option>
+                <option value="4:3">4:3</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="preview-quality">Resolution / Quality</label>
+              <select id="preview-quality" style="width: 100%;">
+                <option value="1080p">1080p Playback</option>
+                <option value="4K">4K Quality</option>
+                <option value="720p">720p Draft</option>
+                <option value="480p">480p Proxy</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="preview-guides">Grid Guides Overlay</label>
+              <select id="preview-guides" style="width: 100%;">
+                <option value="none">No Guides</option>
+                <option value="thirds">Rule of Thirds</option>
+                <option value="safe">Safe Zones</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div class="sidebar-section" style="margin-top: auto;">
           <div class="sidebar-title" style="margin-bottom: 0.5rem;">Shortcuts</div>
           <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5;">
@@ -181,11 +216,30 @@
           </div>
         </div>
 
-        <!-- ROW 2: Two-column settings & prompt completed output -->
+        <!-- Timeline Row Split Resizer (Vertical Resize) -->
+        <div id="row-resizer" class="row-resizer" title="Drag to Resize Timeline Height"></div>
+
+        <!-- ROW 3: Details panels (Dock columns) -->
         <div class="row-details">
+          <div id="dock-slot-1" class="dock-slot" data-slot-index="1">
+            <div class="dock-header"></div>
+            <div class="dock-content"></div>
+          </div>
+          <div id="dock-slot-2" class="dock-slot" data-slot-index="2">
+            <div class="dock-header"></div>
+            <div class="dock-content"></div>
+          </div>
+          <div id="dock-slot-3" class="dock-slot" data-slot-index="3">
+            <div class="dock-header"></div>
+            <div class="dock-content"></div>
+          </div>
+        </div>
+
+        <!-- Template containers for panels, moved dynamically by JavaScript -->
+        <div id="panel-templates" style="display: none;">
           
-          <!-- Column 2.1: Settings / Clip config inputs -->
-          <div class="col-settings">
+          <!-- Panel 1: Settings / Clip config inputs -->
+          <div id="panel-settings" class="details-panel col-settings">
             
             <!-- Empty state when no clip selected -->
             <div id="empty-state" class="empty-state">
@@ -285,10 +339,9 @@
 
           </div>
 
-          <!-- Column 2.2: Prompt completed output -->
-          <div class="col-prompt-output">
-            <div class="prompt-output-header">
-              <div class="prompt-title">Veo 3.1 Compiled Prompt</div>
+          <!-- Panel 2: Prompt completed output -->
+          <div id="panel-prompt" class="details-panel col-prompt-output">
+            <div class="prompt-output-header" style="border-bottom: none; margin-bottom: 0.5rem; justify-content: flex-end;">
               <button id="copy-btn" class="btn btn-primary btn-sm">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 Copy Prompt
@@ -301,6 +354,32 @@
             
             <div class="prompt-hints">
               <p>• Copy the compiled prompt output above and paste it directly into your Google Vids scene panel.</p>
+            </div>
+          </div>
+
+          <!-- Panel 3: Viewport Preview Panel -->
+          <div id="panel-preview" class="details-panel col-preview">
+            <div class="viewport-display-container">
+              <div id="viewport-screen" class="viewport-screen">
+                <!-- Dynamic overlays -->
+                <div id="viewport-grid" class="viewport-overlay-grid" style="display: none;"></div>
+                <div id="viewport-safe" class="viewport-overlay-safe" style="display: none;">
+                  <div class="safe-action-box"></div>
+                  <div class="safe-title-box"></div>
+                </div>
+                <div id="viewport-watermark" class="viewport-watermark-text">Veo 3.1 • 1080p Playback</div>
+                
+                <div class="viewport-content">
+                  <div id="viewport-placeholder" class="viewport-placeholder">
+                    <span style="font-size: 2.5rem; display: block; margin-bottom: 8px; filter: drop-shadow(0 0 10px rgba(0,229,255,0.4));">🎬</span>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px;">Timeline Viewport</p>
+                  </div>
+                  <img id="viewport-image" class="viewport-image" style="display: none;">
+                </div>
+
+                <!-- Live Subtitle Overlay -->
+                <div id="viewport-subtitles" class="viewport-subtitles">Ready to Sync</div>
+              </div>
             </div>
           </div>
 

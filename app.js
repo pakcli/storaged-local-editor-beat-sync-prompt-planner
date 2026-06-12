@@ -20,7 +20,21 @@ let state = {
   autoSnap: true,
   syncPanelControl: false,
   timelineStart: 0,
-  timelineEnd: 60
+  timelineEnd: 60,
+  timelineHeight: 240,
+  previewRatio: '9:16',
+  previewQuality: '1080p',
+  previewGuides: 'none',
+  dock: {
+    'panel-settings': 1,
+    'panel-prompt': 2,
+    'panel-preview': 3
+  },
+  activeTabInSlot: {
+    1: 'panel-settings',
+    2: 'panel-prompt',
+    3: 'panel-preview'
+  }
 };
 
 // DOM Elements
@@ -69,12 +83,39 @@ const els = {
   syncPanelToggle: document.getElementById('sync-panel-toggle'),
   timelineStartInput: document.getElementById('timeline-start-input'),
   timelineEndInput: document.getElementById('timeline-end-input'),
-  exportPngBtn: document.getElementById('export-png-btn'),
   sketchContainer: document.getElementById('sketch-container'),
   sketchPlaceholder: document.getElementById('sketch-placeholder'),
   sketchPreview: document.getElementById('sketch-preview'),
   removeSketchBtn: document.getElementById('remove-sketch-btn'),
-  sketchFileInput: document.getElementById('sketch-file-input')
+  sketchFileInput: document.getElementById('sketch-file-input'),
+
+  // Header Player Upgrades
+  restartBtn: document.getElementById('restart-btn'),
+  volumeSlider: document.getElementById('volume-slider'),
+
+  // Details Slots & Panels
+  dockSlots: [
+    document.getElementById('dock-slot-1'),
+    document.getElementById('dock-slot-2'),
+    document.getElementById('dock-slot-3')
+  ],
+  panelSettings: document.getElementById('panel-settings'),
+  panelPrompt: document.getElementById('panel-prompt'),
+  panelPreview: document.getElementById('panel-preview'),
+  rowResizer: document.getElementById('row-resizer'),
+  rowTimeline: document.querySelector('.row-timeline'),
+
+  // Viewport
+  previewRatio: document.getElementById('preview-ratio'),
+  previewQuality: document.getElementById('preview-quality'),
+  previewGuides: document.getElementById('preview-guides'),
+  viewportScreen: document.getElementById('viewport-screen'),
+  viewportImage: document.getElementById('viewport-image'),
+  viewportPlaceholder: document.getElementById('viewport-placeholder'),
+  viewportSubtitles: document.getElementById('viewport-subtitles'),
+  viewportGrid: document.getElementById('viewport-grid'),
+  viewportSafe: document.getElementById('viewport-safe'),
+  viewportWatermark: document.getElementById('viewport-watermark')
 };
 
 // Preset prompts and details
@@ -180,6 +221,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   setupEventListeners();
   renderRuler();
   renderTimeline();
+  setupDockLayout();
+  renderDock();
+  updateViewportPreview();
 });
 
 // Setup simple Audio element
@@ -190,6 +234,7 @@ function setupAudioElement() {
       state.playheadTime = state.audioElement.currentTime;
       updatePlayheadPosition();
       updateTimeDisplay();
+      updateViewportPreview();
     }
   });
   state.audioElement.addEventListener('ended', () => {
@@ -219,16 +264,22 @@ function playbackLoop() {
   const dt = (now - lastPlaybackTime) / 1000;
   lastPlaybackTime = now;
 
+  // Enforce muting and volume controls
   if (state.playheadTime < 0) {
+    state.audioElement.muted = true;
     state.playheadTime += dt;
     if (state.playheadTime >= 0) {
       state.playheadTime = 0;
       state.audioElement.currentTime = 0;
+      state.audioElement.muted = false;
+      if (els.volumeSlider) state.audioElement.volume = parseFloat(els.volumeSlider.value);
       state.audioElement.play().catch(err => console.error(err));
     }
     updatePlayheadPosition();
     updateTimeDisplay();
   } else {
+    state.audioElement.muted = false;
+    if (els.volumeSlider) state.audioElement.volume = parseFloat(els.volumeSlider.value);
     state.playheadTime = state.audioElement.currentTime;
     updatePlayheadPosition();
     updateTimeDisplay();
@@ -246,6 +297,9 @@ function playbackLoop() {
       selectClip(activeClip.id);
     }
   }
+
+  // Live viewport preview update
+  updateViewportPreview();
 
   requestAnimationFrame(playbackLoop);
 }
@@ -393,6 +447,11 @@ async function selectProject(projectName) {
     state.selectedClipId = null;
     state.timelineStart = 0;
     state.timelineEnd = 60;
+    state.timelineHeight = 240;
+    if (els.rowTimeline) {
+      els.rowTimeline.style.height = `${state.timelineHeight}px`;
+    }
+    window.dispatchEvent(new Event('resize'));
     if (els.timelineStartInput) els.timelineStartInput.value = "00:00";
     if (els.timelineEndInput) els.timelineEndInput.value = "01:00";
     loadAudioTrack(null);
@@ -429,6 +488,18 @@ async function selectProject(projectName) {
     state.selectedClipId = null;
     state.timelineStart = state.currentProject.timelineStart;
     state.timelineEnd = state.currentProject.timelineEnd;
+
+    // Load custom height for this project
+    const savedHeight = localStorage.getItem(`vibesync_timeline_h_${projectName}`);
+    if (savedHeight) {
+      state.timelineHeight = parseInt(savedHeight, 10) || 240;
+    } else {
+      state.timelineHeight = 240;
+    }
+    if (els.rowTimeline) {
+      els.rowTimeline.style.height = `${state.timelineHeight}px`;
+    }
+    window.dispatchEvent(new Event('resize'));
 
     // Update range input values
     if (els.timelineStartInput) els.timelineStartInput.value = formatTimeStr(state.timelineStart);
@@ -624,6 +695,148 @@ function renderRuler() {
 
 // Setup standard event listeners
 function setupEventListeners() {
+  // Header player upgrades
+  els.restartBtn.addEventListener('click', () => {
+    state.playheadTime = state.timelineStart;
+    if (state.playheadTime >= 0) {
+      state.audioElement.currentTime = state.playheadTime;
+      state.audioElement.muted = false;
+      if (els.volumeSlider) state.audioElement.volume = parseFloat(els.volumeSlider.value);
+    } else {
+      state.audioElement.muted = true;
+      state.audioElement.currentTime = 0;
+      state.audioElement.pause();
+    }
+    updatePlayheadPosition();
+    updateTimeDisplay();
+    updateViewportPreview();
+
+    // If not currently playing, start playing!
+    if (!state.isPlaying) {
+      togglePlayback();
+    }
+  });
+
+  if (els.volumeSlider) {
+    els.volumeSlider.addEventListener('input', (e) => {
+      const vol = parseFloat(e.target.value);
+      state.volume = vol;
+      if (state.playheadTime >= 0) {
+        state.audioElement.volume = vol;
+        state.audioElement.muted = false;
+      }
+      
+      const icon = document.getElementById('volume-icon');
+      if (icon) {
+        if (vol === 0) icon.innerText = '🔇';
+        else if (vol < 0.4) icon.innerText = '🔈';
+        else if (vol < 0.7) icon.innerText = '🔉';
+        else icon.innerText = '🔊';
+      }
+    });
+  }
+
+  // Premiere Pro Slots Drag and Drop listeners
+  els.dockSlots.forEach(slotEl => {
+    if (!slotEl) return;
+    const slotIdx = parseInt(slotEl.dataset.slotIndex);
+
+    slotEl.addEventListener('dragover', (e) => {
+      e.preventDefault(); // Required to allow drop
+      slotEl.classList.add('drag-hover');
+    });
+
+    slotEl.addEventListener('dragleave', () => {
+      slotEl.classList.remove('drag-hover');
+    });
+
+    slotEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      slotEl.classList.remove('drag-hover');
+      const panelId = e.dataTransfer.getData('text/plain');
+      if (panelId && (panelId === 'panel-settings' || panelId === 'panel-prompt' || panelId === 'panel-preview')) {
+        state.dock[panelId] = slotIdx;
+        state.activeTabInSlot[slotIdx] = panelId;
+        
+        // Save layouts config to localStorage
+        localStorage.setItem('vibesync_dock_config', JSON.stringify(state.dock));
+        
+        renderDock();
+      }
+    });
+  });
+
+  // Timeline height splitter resizer drag handling
+  if (els.rowResizer && els.rowTimeline) {
+    els.rowResizer.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      els.rowResizer.classList.add('dragging');
+
+      const startY = e.clientY;
+      const startHeight = els.rowTimeline.offsetHeight;
+
+      const onPointerMove = (moveEvent) => {
+        const dy = moveEvent.clientY - startY;
+        let newHeight = startHeight + dy;
+
+        // Clamp timeline height between 120px and 75% of viewport height
+        if (newHeight < 120) newHeight = 120;
+        const maxHeight = window.innerHeight * 0.75;
+        if (newHeight > maxHeight) newHeight = maxHeight;
+
+        state.timelineHeight = newHeight;
+        els.rowTimeline.style.height = `${newHeight}px`;
+
+        // Dispatch window resize event to force canvas timeline re-draws
+        window.dispatchEvent(new Event('resize'));
+      };
+
+      const onPointerUp = () => {
+        els.rowResizer.classList.remove('dragging');
+        document.removeEventListener('pointermove', onPointerMove);
+        document.removeEventListener('pointerup', onPointerUp);
+
+        // Save custom timeline height
+        if (state.currentProject) {
+          localStorage.setItem(`vibesync_timeline_h_${state.currentProject.name}`, state.timelineHeight);
+        }
+      };
+
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup', onPointerUp);
+    });
+  }
+
+  // Viewport Settings listeners
+  els.previewRatio.addEventListener('change', (e) => {
+    state.previewRatio = e.target.value;
+    els.viewportScreen.style.aspectRatio = e.target.value.replace(':', ' / ');
+  });
+
+  els.previewQuality.addEventListener('change', (e) => {
+    state.previewQuality = e.target.value;
+    let text = `Veo 3.1 • ${state.previewQuality}`;
+    if (state.previewQuality === '1080p') text += ' Playback';
+    else if (state.previewQuality === '4K') text += ' Quality';
+    else if (state.previewQuality === '720p') text += ' Draft';
+    else if (state.previewQuality === '480p') text += ' Proxy';
+    els.viewportWatermark.innerText = text;
+  });
+
+  els.previewGuides.addEventListener('change', (e) => {
+    state.previewGuides = e.target.value;
+    if (state.previewGuides === 'none') {
+      els.viewportGrid.style.display = 'none';
+      els.viewportSafe.style.display = 'none';
+    } else if (state.previewGuides === 'thirds') {
+      els.viewportGrid.style.display = 'block';
+      els.viewportSafe.style.display = 'none';
+    } else if (state.previewGuides === 'safe') {
+      els.viewportGrid.style.display = 'none';
+      els.viewportSafe.style.display = 'flex';
+    }
+  });
+
   // Play / Pause
   els.playBtn.addEventListener('click', togglePlayback);
 
@@ -683,8 +896,6 @@ function setupEventListeners() {
     renderTimeline();
     analyzeAndDrawWaveform();
   });
-
-  els.exportPngBtn.addEventListener('click', exportTimelinePNG);
 
   // Storyboard Sketch listeners
   els.sketchContainer.addEventListener('click', (e) => {
@@ -798,6 +1009,57 @@ function setupEventListeners() {
   document.addEventListener('pointermove', handlePointerMove);
   document.addEventListener('pointerup', handlePointerUp);
 
+  // Adobe Premiere Pro style mouse wheel zooming and panning
+  if (els.timelineWrapper) {
+    els.timelineWrapper.addEventListener('wheel', (e) => {
+      e.preventDefault();
+
+      const rect = els.timelineWrapper.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const pct = Math.max(0, Math.min(1, mouseX / rect.width));
+
+      const currentRange = state.timelineEnd - state.timelineStart;
+      const hoverTime = state.timelineStart + pct * currentRange;
+
+      if (e.altKey || e.ctrlKey) {
+        // Zoom timeline centered on mouse hover position
+        const zoomIntensity = 0.08;
+        const factor = e.deltaY < 0 ? (1 - zoomIntensity) : (1 + zoomIntensity);
+
+        let newRange = currentRange * factor;
+        // Clamp minimum zoom to 1 second, maximum zoom to 1 hour
+        if (newRange < 1) newRange = 1;
+        if (newRange > 3600) newRange = 3600;
+
+        state.timelineStart = hoverTime - pct * newRange;
+        state.timelineEnd = hoverTime + (1 - pct) * newRange;
+      } else {
+        // Pan timeline left/right
+        const panIntensity = 0.05;
+        const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+        const shiftAmount = currentRange * panIntensity * (delta > 0 ? 1 : -1);
+
+        state.timelineStart += shiftAmount;
+        state.timelineEnd += shiftAmount;
+      }
+
+      // Update range settings textboxes
+      if (els.timelineStartInput) els.timelineStartInput.value = formatTimeStr(state.timelineStart);
+      if (els.timelineEndInput) els.timelineEndInput.value = formatTimeStr(state.timelineEnd);
+
+      if (state.currentProject) {
+        state.currentProject.timelineStart = state.timelineStart;
+        state.currentProject.timelineEnd = state.timelineEnd;
+      }
+
+      // Redraw ruler, clips, playhead, and waveform
+      renderRuler();
+      renderTimeline();
+      updatePlayheadPosition();
+      analyzeAndDrawWaveform();
+    }, { passive: false });
+  }
+
   // Mobile & Desktop Drawer Toggle Listeners
   const sidebarToggle = document.getElementById('sidebar-toggle-btn');
   const sidebarClose = document.getElementById('sidebar-close-btn');
@@ -868,12 +1130,16 @@ function handleTimelineSeek(e) {
 
   state.playheadTime = targetTime;
   if (state.playheadTime >= 0) {
+    state.audioElement.muted = false;
+    if (els.volumeSlider) state.audioElement.volume = parseFloat(els.volumeSlider.value);
     state.audioElement.currentTime = state.playheadTime;
   } else {
+    state.audioElement.muted = true;
     state.audioElement.currentTime = 0;
   }
   updatePlayheadPosition();
   updateTimeDisplay();
+  updateViewportPreview();
 }
 
 // Playhead location updates
@@ -1041,145 +1307,7 @@ function exportProjectJSON() {
   showNotification('Project JSON downloaded!');
 }
 
-// Export the visual timeline (waveform + ruler ticks + clips) as a PNG image
-function exportTimelinePNG() {
-  if (!state.currentProject) {
-    alert('No project loaded to export.');
-    return;
-  }
 
-  const canvas = els.waveformCanvas;
-  if (!canvas) return;
-
-  // Create an offscreen canvas to combine waveform, ruler, and clips
-  const exportCanvas = document.createElement('canvas');
-  exportCanvas.width = canvas.width;
-  exportCanvas.height = canvas.height + 40; // Extra height for ruler and margin
-  const ctx = exportCanvas.getContext('2d');
-
-  // Fill dark background
-  ctx.fillStyle = '#0d0d13';
-  ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-
-  // Draw the waveform (centered vertically, shifted down slightly to leave space for ruler)
-  ctx.drawImage(canvas, 0, 30);
-
-  const range = state.timelineEnd - state.timelineStart;
-  const width = exportCanvas.width;
-  const height = canvas.height;
-
-  // Draw ruler line
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, 25);
-  ctx.lineTo(width, 25);
-  ctx.stroke();
-
-  // Draw ruler ticks
-  let step = 5;
-  if (range <= 10) step = 1;
-  else if (range <= 30) step = 2;
-  else if (range <= 90) step = 5;
-  else step = 10;
-
-  const firstTick = Math.ceil(state.timelineStart / step) * step;
-
-  ctx.fillStyle = '#8e8e9f';
-  ctx.font = '10px monospace';
-  ctx.textAlign = 'left';
-
-  for (let t = firstTick; t <= state.timelineEnd; t += step) {
-    const leftPct = timeToPct(t);
-    if (leftPct < 0 || leftPct > 100) continue;
-    const x = (leftPct / 100) * width;
-    
-    // Draw tick line
-    ctx.strokeStyle = t % (step * 2) === 0 ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)';
-    ctx.beginPath();
-    ctx.moveTo(x, 10);
-    ctx.lineTo(x, 25);
-    ctx.stroke();
-
-    // Draw tick text
-    ctx.fillText(`${t}s`, x + 4, 20);
-  }
-
-  // Draw clips
-  state.clips.forEach(clip => {
-    const startPct = timeToPct(clip.start);
-    const endPct = timeToPct(clip.end);
-    if (startPct > 100 || endPct < 0) return;
-
-    const x1 = Math.max(0, (startPct / 100) * width);
-    const x2 = Math.min(width, (endPct / 100) * width);
-    const w = x2 - x1;
-    if (w <= 0) return;
-
-    // Determine colors based on clip theme
-    let fill = 'rgba(80, 80, 95, 0.85)';
-    let stroke = 'rgba(120, 120, 140, 0.4)';
-    if (clip.theme === 'red-rush') {
-      fill = 'rgba(255, 56, 56, 0.8)';
-      stroke = 'rgba(255, 100, 100, 0.4)';
-    } else if (clip.theme === 'calm') {
-      fill = 'rgba(0, 160, 220, 0.75)';
-      stroke = 'rgba(100, 220, 255, 0.4)';
-    } else if (clip.theme === 'rebuild') {
-      fill = 'rgba(189, 0, 255, 0.75)';
-      stroke = 'rgba(220, 100, 255, 0.4)';
-    } else if (clip.theme === 'outro') {
-      fill = 'rgba(30, 30, 40, 0.85)';
-      stroke = 'rgba(80, 80, 95, 0.4)';
-    }
-
-    // Clip box coordinates
-    const clipY = 35 + (height * 0.1);
-    const clipH = height * 0.6;
-
-    // Draw clip box
-    ctx.fillStyle = fill;
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.roundRect(x1, clipY, w, clipH, 6);
-    ctx.fill();
-    ctx.stroke();
-
-    // Draw selection border if selected
-    if (clip.id === state.selectedClipId) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.roundRect(x1, clipY, w, clipH, 6);
-      ctx.stroke();
-    }
-
-    // Draw clip text labels (clip labels to box width to avoid bleed)
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x1 + 4, clipY, w - 8, clipH);
-    ctx.clip();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px sans-serif';
-    ctx.fillText(clip.title || 'Untitled', x1 + 8, clipY + 18);
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.font = '9px monospace';
-    ctx.fillText(`${clip.start.toFixed(1)}s - ${clip.end.toFixed(1)}s`, x1 + 8, clipY + clipH - 8);
-
-    ctx.restore();
-  });
-
-  // Download combined image
-  const dataUrl = exportCanvas.toDataURL("image/png");
-  const link = document.createElement('a');
-  link.download = `${state.currentProject ? state.currentProject.name : 'vibesync'}-timeline.png`;
-  link.href = dataUrl;
-  link.click();
-  showNotification('Timeline PNG downloaded!');
-}
 
 // Import Project from a local JSON file
 function handleProjectImport(e) {
@@ -1562,6 +1690,7 @@ function updateEditorPanel() {
   if (!state.selectedClipId) {
     els.emptyState.style.display = 'flex';
     els.editorForm.style.display = 'none';
+    updateViewportPreview();
     return;
   }
 
@@ -1596,6 +1725,7 @@ function updateEditorPanel() {
   els.fieldStyle.value = clip.style || '';
 
   compilePromptText(clip);
+  updateViewportPreview();
 }
 
 // Build Prompt output text
@@ -1609,6 +1739,145 @@ function compilePromptText(clip) {
 
   const output = `A cinematic video of ${vals.subject}, ${vals.action}, ${vals.camera}. Styling: ${vals.style}.`;
   els.promptCompiled.innerText = output;
+}
+
+// Dynamic Viewport Storyboard Preview update
+function updateViewportPreview() {
+  let activeClip = null;
+  
+  if (state.isPlaying) {
+    // During active playback, show clip under playhead
+    activeClip = state.clips.find(c => state.playheadTime >= c.start && state.playheadTime <= c.end);
+  } else {
+    // When paused, show selected clip
+    activeClip = state.clips.find(c => c.id === state.selectedClipId);
+  }
+
+  if (activeClip) {
+    if (activeClip.image) {
+      els.viewportImage.src = activeClip.image;
+      els.viewportImage.style.display = 'block';
+      els.viewportPlaceholder.style.display = 'none';
+    } else {
+      els.viewportImage.src = '';
+      els.viewportImage.style.display = 'none';
+      els.viewportPlaceholder.style.display = 'flex';
+    }
+
+    // Update subtitles overlay with the compiled prompt
+    const subject = activeClip.subject || '';
+    const action = activeClip.action || '';
+    const camera = activeClip.camera || '';
+    const style = activeClip.style || '';
+    
+    let subtitleText = '';
+    if (subject || action || camera) {
+      subtitleText = `A cinematic video of ${subject}, ${action}, ${camera}.`;
+      if (style) subtitleText += ` Styling: ${style}.`;
+    } else {
+      subtitleText = activeClip.title || 'Untitled';
+    }
+    
+    els.viewportSubtitles.innerText = subtitleText;
+    els.viewportSubtitles.style.display = 'block';
+  } else {
+    // No active or selected clip
+    els.viewportImage.src = '';
+    els.viewportImage.style.display = 'none';
+    els.viewportPlaceholder.style.display = 'flex';
+    els.viewportSubtitles.innerText = 'Ready to Sync';
+  }
+}
+
+function renderDock() {
+  const panels = {
+    'panel-settings': { element: els.panelSettings, title: 'Clip Settings' },
+    'panel-prompt': { element: els.panelPrompt, title: 'Compiled Prompt' },
+    'panel-preview': { element: els.panelPreview, title: 'Storyboard Viewport' }
+  };
+
+  // Render each slot (1, 2, 3)
+  for (let slotIdx = 1; slotIdx <= 3; slotIdx++) {
+    const slotEl = els.dockSlots[slotIdx - 1];
+    if (!slotEl) continue;
+
+    const headerEl = slotEl.querySelector('.dock-header');
+    const contentEl = slotEl.querySelector('.dock-content');
+    if (!headerEl || !contentEl) continue;
+
+    // Find all panels in this slot
+    const slotPanels = Object.keys(state.dock).filter(pId => state.dock[pId] === slotIdx);
+
+    if (slotPanels.length === 0) {
+      // Hide the slot column
+      slotEl.style.display = 'none';
+      continue;
+    }
+
+    // Show the slot column
+    slotEl.style.display = 'flex';
+
+    // Clear headers
+    headerEl.innerHTML = '';
+    
+    // Ensure the active tab in this slot is one of the panels docked here
+    let activePanelId = state.activeTabInSlot[slotIdx];
+    if (!slotPanels.includes(activePanelId)) {
+      activePanelId = slotPanels[0];
+      state.activeTabInSlot[slotIdx] = activePanelId;
+    }
+
+    // Draw tab headers
+    slotPanels.forEach(pId => {
+      const pInfo = panels[pId];
+      const tabBtn = document.createElement('div');
+      tabBtn.className = 'dock-tab';
+      if (pId === activePanelId) {
+        tabBtn.classList.add('active');
+      }
+      tabBtn.innerText = pInfo.title;
+      tabBtn.setAttribute('draggable', 'true');
+      tabBtn.dataset.panelId = pId;
+
+      // Drag and drop events for the tab itself
+      tabBtn.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', pId);
+        tabBtn.style.opacity = '0.5';
+      });
+
+      tabBtn.addEventListener('dragend', () => {
+        tabBtn.style.opacity = '1';
+      });
+
+      // Tab click to select active tab
+      tabBtn.addEventListener('click', () => {
+        state.activeTabInSlot[slotIdx] = pId;
+        renderDock();
+      });
+
+      headerEl.appendChild(tabBtn);
+    });
+
+    // Move active panel to content
+    contentEl.innerHTML = '';
+    const activePanel = panels[activePanelId].element;
+    contentEl.appendChild(activePanel);
+    activePanel.style.display = 'flex';
+  }
+}
+
+function setupDockLayout() {
+  const savedConfig = localStorage.getItem('vibesync_dock_config');
+  if (savedConfig) {
+    try {
+      const parsed = JSON.parse(savedConfig);
+      if (parsed['panel-settings'] && parsed['panel-prompt'] && parsed['panel-preview']) {
+        state.dock = parsed;
+      }
+    } catch (e) {
+      console.error('Failed to parse saved dock config:', e);
+    }
+  }
 }
 
 // Sync input changes from HTML form back to the Clip state
@@ -1666,6 +1935,7 @@ function syncFormToClip() {
   clip.style = els.fieldStyle.value;
 
   compilePromptText(clip);
+  updateViewportPreview();
 }
 
 // Copy prompt clipboard helper
