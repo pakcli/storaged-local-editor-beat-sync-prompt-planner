@@ -34,7 +34,11 @@ let state = {
     1: 'panel-settings',
     2: 'panel-prompt',
     3: 'panel-preview'
-  }
+  },
+  undoStack: [],
+  redoStack: [],
+  isWheeling: false,
+  wheelTimeout: null
 };
 
 // DOM Elements
@@ -193,6 +197,120 @@ function formatTimeStr(secs) {
   const s = Math.floor(absSecs % 60);
   const sign = isNegative ? '-' : '';
   return `${sign}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// History Undo/Redo State Management
+function saveHistory() {
+  if (!state.currentProject) return;
+
+  const snapshot = {
+    clips: JSON.parse(JSON.stringify(state.clips)),
+    timelineStart: state.timelineStart,
+    timelineEnd: state.timelineEnd,
+    selectedClipId: state.selectedClipId
+  };
+
+  // Push to undo stack
+  if (!state.undoStack) state.undoStack = [];
+  state.undoStack.push(snapshot);
+
+  // Keep a maximum of 16 steps
+  if (state.undoStack.length > 16) {
+    state.undoStack.shift();
+  }
+
+  // Clear redo stack on new action
+  state.redoStack = [];
+
+  updateUndoRedoButtons();
+}
+
+function undo() {
+  if (!state.undoStack || state.undoStack.length === 0) return;
+
+  const currentSnapshot = {
+    clips: JSON.parse(JSON.stringify(state.clips)),
+    timelineStart: state.timelineStart,
+    timelineEnd: state.timelineEnd,
+    selectedClipId: state.selectedClipId
+  };
+  
+  if (!state.redoStack) state.redoStack = [];
+  state.redoStack.push(currentSnapshot);
+  if (state.redoStack.length > 16) {
+    state.redoStack.shift();
+  }
+
+  const previousSnapshot = state.undoStack.pop();
+  restoreSnapshot(previousSnapshot);
+}
+
+function redo() {
+  if (!state.redoStack || state.redoStack.length === 0) return;
+
+  const currentSnapshot = {
+    clips: JSON.parse(JSON.stringify(state.clips)),
+    timelineStart: state.timelineStart,
+    timelineEnd: state.timelineEnd,
+    selectedClipId: state.selectedClipId
+  };
+
+  state.undoStack.push(currentSnapshot);
+  if (state.undoStack.length > 16) {
+    state.undoStack.shift();
+  }
+
+  const nextSnapshot = state.redoStack.pop();
+  restoreSnapshot(nextSnapshot);
+}
+
+function restoreSnapshot(snapshot) {
+  state.clips = snapshot.clips;
+  state.timelineStart = snapshot.timelineStart;
+  state.timelineEnd = snapshot.timelineEnd;
+  state.selectedClipId = snapshot.selectedClipId;
+
+  // Sync inputs
+  if (els.timelineStartInput) els.timelineStartInput.value = formatTimeStr(state.timelineStart);
+  if (els.timelineEndInput) els.timelineEndInput.value = formatTimeStr(state.timelineEnd);
+
+  if (state.currentProject) {
+    state.currentProject.timelineStart = state.timelineStart;
+    state.currentProject.timelineEnd = state.timelineEnd;
+  }
+
+  // Redraw everything
+  renderRuler();
+  renderTimeline();
+  updatePlayheadPosition();
+  analyzeAndDrawWaveform();
+  updateEditorPanel();
+
+  // Save current project state
+  saveCurrentProject();
+
+  updateUndoRedoButtons();
+}
+
+function initHistory() {
+  state.undoStack = [];
+  state.redoStack = [];
+  updateUndoRedoButtons();
+}
+
+function updateUndoRedoButtons() {
+  const undoBtn = document.getElementById('undo-btn');
+  const redoBtn = document.getElementById('redo-btn');
+  if (undoBtn) {
+    undoBtn.disabled = !state.undoStack || state.undoStack.length === 0;
+    undoBtn.style.opacity = undoBtn.disabled ? '0.35' : '1';
+    undoBtn.style.cursor = undoBtn.disabled ? 'not-allowed' : 'pointer';
+  }
+  if (redoBtn) {
+    redoBtn.disabled = !state.redoStack || state.redoStack.length === 0;
+    redoBtn.style.opacity = redoBtn.disabled ? '0.35' : '1';
+    redoBtn.style.cursor = redoBtn.disabled ? 'not-allowed' : 'pointer';
+  }
 }
 
 // Timeline coordinate mapping helpers
@@ -511,6 +629,7 @@ async function selectProject(projectName) {
 
     renderTimeline();
     updateEditorPanel();
+    initHistory();
   }
 }
 
@@ -840,11 +959,31 @@ function setupEventListeners() {
   // Play / Pause
   els.playBtn.addEventListener('click', togglePlayback);
 
-  // Spacebar to play/pause
+  // Undo / Redo button listeners
+  const undoBtn = document.getElementById('undo-btn');
+  const redoBtn = document.getElementById('redo-btn');
+  if (undoBtn) undoBtn.addEventListener('click', undo);
+  if (redoBtn) redoBtn.addEventListener('click', redo);
+
+  // Keydown shortcuts: Spacebar for play/pause, Ctrl+Z for undo, Ctrl+Y / Ctrl+Shift+Z for redo
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
       e.preventDefault();
       togglePlayback();
+    }
+
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      } else if (e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      }
     }
   });
 
@@ -866,13 +1005,20 @@ function setupEventListeners() {
 
   // Editor Toggles and Project Settings
   els.snapToggle.addEventListener('change', (e) => {
+    saveHistory();
     state.autoSnap = e.target.checked;
+    saveCurrentProject();
   });
 
   els.syncPanelToggle.addEventListener('change', (e) => {
+    saveHistory();
     state.syncPanelControl = e.target.checked;
+    saveCurrentProject();
   });
 
+  els.timelineStartInput.addEventListener('focus', () => {
+    saveHistory();
+  });
   els.timelineStartInput.addEventListener('change', (e) => {
     const val = parseTimeStr(e.target.value);
     state.timelineStart = val;
@@ -883,8 +1029,12 @@ function setupEventListeners() {
     renderRuler();
     renderTimeline();
     analyzeAndDrawWaveform();
+    saveCurrentProject();
   });
 
+  els.timelineEndInput.addEventListener('focus', () => {
+    saveHistory();
+  });
   els.timelineEndInput.addEventListener('change', (e) => {
     const val = parseTimeStr(e.target.value);
     state.timelineEnd = val;
@@ -895,6 +1045,7 @@ function setupEventListeners() {
     renderRuler();
     renderTimeline();
     analyzeAndDrawWaveform();
+    saveCurrentProject();
   });
 
   // Storyboard Sketch listeners
@@ -978,13 +1129,22 @@ function setupEventListeners() {
     els.fieldSubject, els.fieldAction, els.fieldCamera, els.fieldStyle
   ];
   formInputs.forEach(input => {
+    input.addEventListener('focus', () => {
+      saveHistory();
+    });
     input.addEventListener('input', () => {
       syncFormToClip();
       renderTimeline();
     });
+    input.addEventListener('change', () => {
+      saveCurrentProject();
+    });
   });
 
   // Preset Selection
+  els.presetSelect.addEventListener('focus', () => {
+    saveHistory();
+  });
   els.presetSelect.addEventListener('change', (e) => {
     applyPreset(e.target.value);
   });
@@ -1013,6 +1173,17 @@ function setupEventListeners() {
   if (els.timelineWrapper) {
     els.timelineWrapper.addEventListener('wheel', (e) => {
       e.preventDefault();
+
+      // Debounce saving history for continuous wheel action (zoom / pan)
+      if (!state.isWheeling) {
+        state.isWheeling = true;
+        saveHistory();
+      }
+      clearTimeout(state.wheelTimeout);
+      state.wheelTimeout = setTimeout(() => {
+        state.isWheeling = false;
+        saveCurrentProject();
+      }, 400);
 
       const rect = els.timelineWrapper.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -1245,6 +1416,7 @@ function createNewProject() {
 
   renderTimeline();
   updateEditorPanel();
+  initHistory();
   saveCurrentProject();
 }
 
@@ -1297,13 +1469,21 @@ function exportProjectJSON() {
     clips: state.clips
   };
 
-  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+  const jsonStr = JSON.stringify(payload, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
   const downloadAnchor = document.createElement('a');
-  downloadAnchor.setAttribute("href", dataStr);
-  downloadAnchor.setAttribute("download", `${state.currentProject.name}.json`);
+  downloadAnchor.href = url;
+  downloadAnchor.download = `${state.currentProject.name}.json`;
   document.body.appendChild(downloadAnchor);
   downloadAnchor.click();
-  downloadAnchor.remove();
+  document.body.removeChild(downloadAnchor);
+
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 100);
+
   showNotification('Project JSON downloaded!');
 }
 
@@ -1338,6 +1518,7 @@ function handleProjectImport(e) {
 
       state.clips = projectData.clips;
       state.selectedClipId = state.clips.length > 0 ? state.clips[0].id : null;
+      initHistory();
 
       // Auto-save the imported project (either to server or local storage)
       await saveCurrentProject();
@@ -1382,6 +1563,8 @@ function createClipAtPlayhead() {
     alert('Please load or create a project first.');
     return;
   }
+
+  saveHistory();
 
   // Sort clips by start time first to ensure neighbor detection is accurate
   state.clips.sort((a, b) => a.start - b.start);
@@ -1439,6 +1622,7 @@ function createClipAtPlayhead() {
 // Delete Clip
 function deleteSelectedClip() {
   if (!state.selectedClipId) return;
+  saveHistory();
   state.clips = state.clips.filter(c => c.id !== state.selectedClipId);
   state.selectedClipId = null;
   renderTimeline();
@@ -1451,6 +1635,7 @@ function applyPreset(key) {
   const preset = PRESETS[key];
   if (!preset) return;
 
+  saveHistory();
   els.clipTheme.value = preset.theme;
   els.fieldSubject.value = preset.subject;
   els.fieldAction.value = preset.action;
@@ -1545,6 +1730,8 @@ function startDrag(e, clipId, action) {
 
   const clip = state.clips.find(c => c.id === clipId);
   if (!clip) return;
+
+  saveHistory();
 
   const rect = els.timelineWrapper.getBoundingClientRect();
   const clipIndex = state.clips.findIndex(c => c.id === clipId);
@@ -1676,6 +1863,7 @@ function handlePointerUp(e) {
   state.dragState = null;
   // Sort clips by start time to maintain clean index order
   state.clips.sort((a, b) => a.start - b.start);
+  saveCurrentProject();
 }
 
 // Select Clip
@@ -1964,6 +2152,7 @@ function handleSketchUpload(e) {
     resizeImage(rawDataUrl, (resizedDataUrl) => {
       const clip = state.clips.find(c => c.id === state.selectedClipId);
       if (clip) {
+        saveHistory();
         clip.image = resizedDataUrl;
         updateEditorPanel();
         renderTimeline();
@@ -2008,6 +2197,7 @@ function resizeImage(dataUrl, callback) {
 function removeSketch() {
   const clip = state.clips.find(c => c.id === state.selectedClipId);
   if (clip) {
+    saveHistory();
     delete clip.image;
     updateEditorPanel();
     renderTimeline();
